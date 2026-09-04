@@ -35,7 +35,7 @@ ALLOWED_ORIGINS = frozenset(
         "https://api.omarchyplugins.com",
     }
 )
-DEFAULT_AUTHOR = "mtolhuys"
+DEFAULT_AUTHOR = ""  # no baked-in author
 METRICS = ("views", "copies", "hearts")
 MAX_DB_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 12 * 1024 * 1024
@@ -122,10 +122,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     if get_config(conn, "author") is None:
-        set_config(conn, "author", DEFAULT_AUTHOR)
+        set_config(conn, "author", "")
     if get_config(conn, "tracked_authors") is None:
-        seed_author = get_config(conn, "author") or DEFAULT_AUTHOR
-        set_config(conn, "tracked_authors", json.dumps([seed_author], ensure_ascii=True))
+        set_config(conn, "tracked_authors", "[]")
     if get_config(conn, "seed_notice") is None:
         set_config(conn, "seed_notice", "1")
     conn.commit()
@@ -265,16 +264,13 @@ def plugin_matches_author_row(row: Any, author_key: str) -> bool:
 def tracked_authors_list(conn: sqlite3.Connection) -> list[str]:
     raw = get_config(conn, "tracked_authors")
     if raw is None:
-        seed = get_config(conn, "author") or DEFAULT_AUTHOR
-        return [seed]
+        return []
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        seed = get_config(conn, "author") or DEFAULT_AUTHOR
-        return [seed]
+        return []
     if not isinstance(parsed, list):
-        seed = get_config(conn, "author") or DEFAULT_AUTHOR
-        return [seed]
+        return []
     out: list[str] = []
     seen: set[str] = set()
     for item in parsed:
@@ -286,9 +282,6 @@ def tracked_authors_list(conn: sqlite3.Connection) -> list[str]:
             continue
         seen.add(low)
         out.append(key)
-    if not out:
-        seed = get_config(conn, "author") or DEFAULT_AUTHOR
-        return [seed]
     return out
 
 
@@ -320,7 +313,7 @@ def add_tracked_author(conn: sqlite3.Connection, key: str) -> str:
 
 
 def authors_payload(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    active = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+    active = (get_config(conn, "author") or "").strip()
     active_low = active.lower()
     tracked = tracked_authors_list(conn)
     rows = conn.execute(
@@ -476,7 +469,9 @@ def insert_sample(
 def collect(author: str | None = None) -> dict[str, Any]:
     conn = connect()
     try:
-        author_key = (author or get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+        author_key = (author or get_config(conn, "author") or "").strip()
+        if not author_key:
+            raise PulseError("validation-failed", "Add an author before collecting")
         if author:
             add_tracked_author(conn, author_key)
         else:
@@ -683,7 +678,7 @@ def query_series(
     else:
         start_ts = now_ts - MONTHLY_KEEP
 
-    author_key = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+    author_key = (get_config(conn, "author") or "").strip()
     plugins = conn.execute(
         "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
     ).fetchall()
@@ -811,7 +806,7 @@ def set_author(author: str) -> dict[str, Any]:
 def list_authors() -> dict[str, Any]:
     conn = connect()
     try:
-        author_key = get_config(conn, "author") or DEFAULT_AUTHOR
+        author_key = get_config(conn, "author") or ""
         return {
             "ok": True,
             "author": author_key,
@@ -963,7 +958,7 @@ def status() -> dict[str, Any]:
         last_collect = get_config(conn, "last_collect_at") or None
         return {
             "ok": True,
-            "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+            "author": get_config(conn, "author") or "",
             "pluginCount": int(plugin_count),
             "sampleCount": int(sample_count),
             "lastCollectAt": int(last_collect) if last_collect else None,

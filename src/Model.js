@@ -13,7 +13,7 @@ function parseJson(raw, fallback) {
 function emptySnapshot() {
   return {
     ok: false,
-    author: "mtolhuys",
+    author: "",
     authors: [],
     resolution: "daily",
     stepSeconds: 86400,
@@ -49,7 +49,7 @@ function parseSnapshot(raw) {
   }
   return {
     ok: true,
-    author: String(parsed.author || "mtolhuys"),
+    author: String(parsed.author || ""),
     authors: Array.isArray(parsed.authors) ? parsed.authors : [],
     resolution: String(parsed.resolution || "daily"),
     stepSeconds: Number(parsed.stepSeconds || 86400),

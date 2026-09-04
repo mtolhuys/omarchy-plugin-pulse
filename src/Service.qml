@@ -20,7 +20,7 @@ Item {
   property string snapshotState: "idle"
   property string lastError: ""
   property string resolution: "daily"
-  property string authorDraft: "mtolhuys"
+  property string authorDraft: ""
   property var snapshot: Model.emptySnapshot()
   property double updatedAt: 0
   property bool expectedStop: false

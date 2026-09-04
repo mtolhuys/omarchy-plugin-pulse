@@ -34,7 +34,7 @@ BarWidget {
 
   property bool popupOpen: false
   property string metric: "views"
-  property string authorEdit: "mtolhuys"
+  property string authorEdit: ""
   property bool settingsOpen: false
   property bool confirmClear: false
   property string confirmDeleteAuthor: ""
@@ -46,7 +46,7 @@ BarWidget {
 
   function open() {
     popupOpen = true
-    authorEdit = authorValue || "mtolhuys"
+    authorEdit = authorValue || ""
     if (pulseService) {
       if (!snapshot.ok) pulseService.refreshSnapshot()
       if (!snapshot.lastCollectAt) pulseService.collectNow()
@@ -204,8 +204,8 @@ BarWidget {
     owner: root
     open: root.popupOpen
     focusTarget: root.settingsOpen ? authorAddField : panelScroll
-    contentWidth: popup.fittedContentWidth(Style.space(480))
-    contentHeight: popup.fittedContentHeight(Math.min(panelColumn.implicitHeight, Style.space(500)))
+    contentWidth: popup.fittedContentWidth(Style.space(520))
+    contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight)
 
     Flickable {
       id: panelScroll
@@ -214,7 +214,7 @@ BarWidget {
       contentHeight: panelColumn.implicitHeight
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      interactive: contentHeight > height + 1
+      interactive: contentHeight > height + 2
       QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
       QQC.ScrollBar.horizontal: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
       focus: true
@@ -449,8 +449,9 @@ BarWidget {
         }
 
         BorderSurface {
+          visible: !root.settingsOpen
           width: parent.width
-          height: root.settingsOpen ? Style.space(110) : Style.space(150)
+          height: Style.space(168)
           color: Util.alpha(Color.popups.text, 0.035)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -469,6 +470,7 @@ BarWidget {
         }
 
         Column {
+          visible: !root.settingsOpen
           width: parent.width
           spacing: Style.space(5)
 
@@ -518,6 +520,7 @@ BarWidget {
         }
 
         BorderSurface {
+          visible: !root.settingsOpen
           width: parent.width
           implicitHeight: totalsColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
@@ -664,6 +667,7 @@ BarWidget {
         }
 
         BorderSurface {
+          visible: !root.settingsOpen
           width: parent.width
           implicitHeight: storageRow.implicitHeight + Style.space(10)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
