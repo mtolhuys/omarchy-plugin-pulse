@@ -304,8 +304,7 @@ def save_tracked_authors(conn: sqlite3.Connection, authors: list[str]) -> None:
             continue
         seen.add(low)
         cleaned.append(key)
-    if not cleaned:
-        cleaned = [DEFAULT_AUTHOR]
+    # Empty list is allowed — do not re-seed DEFAULT_AUTHOR.
     set_config(conn, "tracked_authors", json.dumps(cleaned, ensure_ascii=True))
 
 
@@ -871,12 +870,9 @@ def delete_author(author: str) -> dict[str, Any]:
             )
 
         save_tracked_authors(conn, remaining)
-        current = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+        current = (get_config(conn, "author") or "").strip()
         if current.lower() == low:
-            next_author = remaining[0] if remaining else DEFAULT_AUTHOR
-            if not remaining:
-                save_tracked_authors(conn, [DEFAULT_AUTHOR])
-                next_author = DEFAULT_AUTHOR
+            next_author = remaining[0] if remaining else ""
             set_config(conn, "author", next_author)
         else:
             next_author = current
@@ -884,7 +880,7 @@ def delete_author(author: str) -> dict[str, Any]:
         conn.execute("VACUUM")
         return {
             "ok": True,
-            "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+            "author": get_config(conn, "author") or "",
             "authors": authors_payload(conn),
             "deleted": author_key,
             "purgedPlugins": len(matching_ids),

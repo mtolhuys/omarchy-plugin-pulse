@@ -246,14 +246,13 @@ BarWidget {
             borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
             radius: Style.cornerRadius
 
-            Text {
+            PulseIcon {
+              width: parent.width * 0.62
+              height: width
               anchors.centerIn: parent
-              text: "⌁"
-              color: Color.accent
-              font.family: Style.font.family
-              font.pixelSize: Style.font.title
-              font.bold: true
-              textFormat: Text.PlainText
+              foreground: Color.accent
+              accent: Color.accent
+              active: true
             }
           }
 
@@ -377,7 +376,7 @@ BarWidget {
 
             Text {
               width: parent.width
-              text: "Select to switch · × deletes that author’s stored plugins"
+              text: "Select to switch · Remove purges that author’s stored plugins"
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -406,14 +405,15 @@ BarWidget {
                   }
 
                   Button {
-                    text: root.confirmDeleteAuthor === String(modelData.key) ? "!" : "×"
-                    bordered: root.confirmDeleteAuthor === String(modelData.key)
+                    text: root.confirmDeleteAuthor === String(modelData.key) ? "Purge?" : "Remove"
+                    bordered: true
+                    selected: root.confirmDeleteAuthor === String(modelData.key)
                     foreground: Color.urgent
                     accent: Color.urgent
                     focusable: true
                     tooltipText: root.confirmDeleteAuthor === String(modelData.key)
-                      ? "Click again to purge " + modelData.key
-                      : "Delete " + modelData.key
+                      ? "Click again to permanently purge " + modelData.key
+                      : "Remove " + modelData.key + " and delete stored plugins"
                     onClicked: root.requestDeleteAuthor(modelData.key)
                   }
                 }
