@@ -449,9 +449,8 @@ BarWidget {
         }
 
         BorderSurface {
-          visible: !root.settingsOpen
           width: parent.width
-          height: Style.space(168)
+          height: root.settingsOpen ? Style.space(120) : Style.space(168)
           color: Util.alpha(Color.popups.text, 0.035)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -470,7 +469,6 @@ BarWidget {
         }
 
         Column {
-          visible: !root.settingsOpen
           width: parent.width
           spacing: Style.space(5)
 
@@ -520,7 +518,6 @@ BarWidget {
         }
 
         BorderSurface {
-          visible: !root.settingsOpen
           width: parent.width
           implicitHeight: totalsColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
@@ -667,7 +664,6 @@ BarWidget {
         }
 
         BorderSurface {
-          visible: !root.settingsOpen
           width: parent.width
           implicitHeight: storageRow.implicitHeight + Style.space(10)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
