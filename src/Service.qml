@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v010"
+  readonly property string buildIdentity: "plugin-pulse-service-v011"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -83,6 +83,29 @@ Item {
     authorDraft = author
     pendingAction = "collect-after-author"
     return runHelper(authorProcess, ["set-author", author])
+  }
+
+  function addAuthor(value) {
+    var author = String(value || "").trim()
+    if (!author || author.length > 120) {
+      lastError = "Author must be 1–120 characters"
+      return false
+    }
+    if (authorProcess.running) return false
+    authorDraft = author
+    pendingAction = "collect-after-author"
+    return runHelper(authorProcess, ["add-author", author])
+  }
+
+  function deleteAuthor(value) {
+    var author = String(value || "").trim()
+    if (!author || author.length > 120) {
+      lastError = "Author must be 1–120 characters"
+      return false
+    }
+    if (authorProcess.running) return false
+    pendingAction = "refresh-after-delete"
+    return runHelper(authorProcess, ["delete-author", author])
   }
 
   function togglePlugin(pluginId, enabled) {
@@ -196,13 +219,16 @@ Item {
     }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.lastError = Model.diagnosticText(authorStderr.text, "Could not save author")
+        root.lastError = Model.diagnosticText(authorStderr.text, "Could not update authors")
         root.pendingAction = ""
         return
       }
       if (root.pendingAction === "collect-after-author") {
         root.pendingAction = ""
         root.collectNow(root.authorDraft)
+      } else if (root.pendingAction === "refresh-after-delete") {
+        root.pendingAction = ""
+        root.refreshSnapshot()
       } else {
         root.refreshSnapshot()
       }

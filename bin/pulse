@@ -123,6 +123,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
     if get_config(conn, "author") is None:
         set_config(conn, "author", DEFAULT_AUTHOR)
+    if get_config(conn, "tracked_authors") is None:
+        seed_author = get_config(conn, "author") or DEFAULT_AUTHOR
+        set_config(conn, "tracked_authors", json.dumps([seed_author], ensure_ascii=True))
     if get_config(conn, "seed_notice") is None:
         set_config(conn, "seed_notice", "1")
     conn.commit()
@@ -239,6 +242,118 @@ def matches_author(plugin: dict[str, Any], author_key: str) -> bool:
     ]
     return any(key in value.lower() for value in haystacks)
 
+
+def plugin_matches_author_row(row: Any, author_key: str) -> bool:
+    """Reuse matches_author with a sqlite row / mapping (id, name, author, repo)."""
+    if hasattr(row, "keys"):
+        plugin = {
+            "id": row["id"] if "id" in row.keys() else "",
+            "name": row["name"] if "name" in row.keys() else "",
+            "author": row["author"] if "author" in row.keys() else "",
+            "repo": row["repo"] if "repo" in row.keys() else "",
+        }
+    else:
+        plugin = {
+            "id": getattr(row, "id", ""),
+            "name": getattr(row, "name", ""),
+            "author": getattr(row, "author", ""),
+            "repo": getattr(row, "repo", ""),
+        }
+    return matches_author(plugin, author_key)
+
+
+def tracked_authors_list(conn: sqlite3.Connection) -> list[str]:
+    raw = get_config(conn, "tracked_authors")
+    if raw is None:
+        seed = get_config(conn, "author") or DEFAULT_AUTHOR
+        return [seed]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        seed = get_config(conn, "author") or DEFAULT_AUTHOR
+        return [seed]
+    if not isinstance(parsed, list):
+        seed = get_config(conn, "author") or DEFAULT_AUTHOR
+        return [seed]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        key = str(item or "").strip()
+        if not key:
+            continue
+        low = key.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(key)
+    if not out:
+        seed = get_config(conn, "author") or DEFAULT_AUTHOR
+        return [seed]
+    return out
+
+
+def save_tracked_authors(conn: sqlite3.Connection, authors: list[str]) -> None:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in authors:
+        key = str(item or "").strip()
+        if not key:
+            continue
+        low = key.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        cleaned.append(key)
+    if not cleaned:
+        cleaned = [DEFAULT_AUTHOR]
+    set_config(conn, "tracked_authors", json.dumps(cleaned, ensure_ascii=True))
+
+
+def add_tracked_author(conn: sqlite3.Connection, key: str) -> str:
+    author_key = key.strip()
+    authors = tracked_authors_list(conn)
+    low = author_key.lower()
+    authors = [a for a in authors if a.lower() != low]
+    authors.append(author_key)
+    save_tracked_authors(conn, authors)
+    set_config(conn, "author", author_key)
+    return author_key
+
+
+def authors_payload(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    active = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+    active_low = active.lower()
+    tracked = tracked_authors_list(conn)
+    rows = conn.execute(
+        "SELECT id, name, author, repo FROM plugins"
+    ).fetchall()
+    sample_counts = {
+        str(r["plugin_id"]): int(r["n"])
+        for r in conn.execute(
+            "SELECT plugin_id, COUNT(*) AS n FROM samples GROUP BY plugin_id"
+        )
+    }
+    out: list[dict[str, Any]] = []
+    for key in tracked:
+        matching_ids = [
+            str(row["id"])
+            for row in rows
+            if plugin_matches_author_row(row, key)
+        ]
+        sample_count = sum(sample_counts.get(pid, 0) for pid in matching_ids)
+        out.append(
+            {
+                "key": key,
+                "pluginCount": len(matching_ids),
+                "sampleCount": sample_count,
+                "active": key.lower() == active_low,
+            }
+        )
+    return out
+
+
+def filter_plugins_for_author(plugins: list[Any], author_key: str) -> list[Any]:
+    return [p for p in plugins if plugin_matches_author_row(p, author_key)]
 
 def parse_listed_at(value: Any) -> int | None:
     if not value or not isinstance(value, str):
@@ -364,7 +479,10 @@ def collect(author: str | None = None) -> dict[str, Any]:
     try:
         author_key = (author or get_config(conn, "author") or DEFAULT_AUTHOR).strip()
         if author:
-            set_config(conn, "author", author_key)
+            add_tracked_author(conn, author_key)
+        else:
+            # Ensure current author is tracked
+            add_tracked_author(conn, author_key)
         now_ts = int(time.time())
         catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
         stats = fetch_json(STATS_URL, file_override=os.environ.get("PULSE_STATS_FILE"))
@@ -566,9 +684,11 @@ def query_series(
     else:
         start_ts = now_ts - MONTHLY_KEEP
 
+    author_key = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
     plugins = conn.execute(
         "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
     ).fetchall()
+    plugins = filter_plugins_for_author(plugins, author_key)
     if plugin_ids is not None:
         wanted = set(plugin_ids)
         plugins = [p for p in plugins if p["id"] in wanted]
@@ -644,9 +764,7 @@ def query_series(
             "listedAt": p["listed_at"],
             "enabled": bool(int(p["enabled"])),
         }
-        for p in conn.execute(
-            "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
-        )
+        for p in plugins
     ]
 
     totals = {"views": 0, "copies": 0, "hearts": 0}
@@ -657,7 +775,8 @@ def query_series(
     last_collect = get_config(conn, "last_collect_at")
     return {
         "ok": True,
-        "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+        "author": author_key,
+        "authors": authors_payload(conn),
         "resolution": resolution,
         "stepSeconds": step,
         "rangeStart": start_ts,
@@ -679,9 +798,97 @@ def set_author(author: str) -> dict[str, Any]:
         raise PulseError("validation-failed", "author must be 1–120 characters")
     conn = connect()
     try:
-        set_config(conn, "author", author_key)
+        add_tracked_author(conn, author_key)
         conn.commit()
-        return {"ok": True, "author": author_key}
+        return {
+            "ok": True,
+            "author": author_key,
+            "authors": authors_payload(conn),
+        }
+    finally:
+        conn.close()
+
+
+def list_authors() -> dict[str, Any]:
+    conn = connect()
+    try:
+        author_key = get_config(conn, "author") or DEFAULT_AUTHOR
+        return {
+            "ok": True,
+            "author": author_key,
+            "authors": authors_payload(conn),
+        }
+    finally:
+        conn.close()
+
+
+def add_author(author: str) -> dict[str, Any]:
+    author_key = author.strip()
+    if not author_key or len(author_key) > 120:
+        raise PulseError("validation-failed", "author must be 1–120 characters")
+    conn = connect()
+    try:
+        add_tracked_author(conn, author_key)
+        conn.commit()
+        return {
+            "ok": True,
+            "author": author_key,
+            "authors": authors_payload(conn),
+        }
+    finally:
+        conn.close()
+
+
+def delete_author(author: str) -> dict[str, Any]:
+    author_key = author.strip()
+    if not author_key or len(author_key) > 120:
+        raise PulseError("validation-failed", "author must be 1–120 characters")
+    conn = connect()
+    try:
+        tracked = tracked_authors_list(conn)
+        low = author_key.lower()
+        remaining = [a for a in tracked if a.lower() != low]
+        if len(remaining) == len(tracked):
+            raise PulseError("not-found", f"author not tracked: {author_key}")
+
+        rows = conn.execute(
+            "SELECT id, name, author, repo FROM plugins"
+        ).fetchall()
+        matching_ids = [
+            str(row["id"])
+            for row in rows
+            if plugin_matches_author_row(row, author_key)
+        ]
+        if matching_ids:
+            placeholders = ",".join("?" * len(matching_ids))
+            conn.execute(
+                f"DELETE FROM samples WHERE plugin_id IN ({placeholders})",
+                matching_ids,
+            )
+            conn.execute(
+                f"DELETE FROM plugins WHERE id IN ({placeholders})",
+                matching_ids,
+            )
+
+        save_tracked_authors(conn, remaining)
+        current = (get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+        if current.lower() == low:
+            next_author = remaining[0] if remaining else DEFAULT_AUTHOR
+            if not remaining:
+                save_tracked_authors(conn, [DEFAULT_AUTHOR])
+                next_author = DEFAULT_AUTHOR
+            set_config(conn, "author", next_author)
+        else:
+            next_author = current
+        conn.commit()
+        conn.execute("VACUUM")
+        return {
+            "ok": True,
+            "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+            "authors": authors_payload(conn),
+            "deleted": author_key,
+            "purgedPlugins": len(matching_ids),
+        }
     finally:
         conn.close()
 
@@ -796,6 +1003,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_author = sub.add_parser("set-author", help="Set marketplace author filter")
     p_author.add_argument("author")
 
+    sub.add_parser("authors", help="List tracked authors and counts")
+
+    p_add = sub.add_parser("add-author", help="Track an author and make it current")
+    p_add.add_argument("author")
+
+    p_del = sub.add_parser("delete-author", help="Untrack author and purge their data")
+    p_del.add_argument("author")
+
     p_toggle = sub.add_parser("toggle-plugin", help="Enable or disable a plugin series")
     p_toggle.add_argument("plugin_id")
     p_toggle.add_argument("state", choices=["on", "off"])
@@ -820,6 +1035,12 @@ def main(argv: list[str] | None = None) -> None:
                 conn.close()
         elif args.command == "set-author":
             emit(set_author(args.author))
+        elif args.command == "authors":
+            emit(list_authors())
+        elif args.command == "add-author":
+            emit(add_author(args.author))
+        elif args.command == "delete-author":
+            emit(delete_author(args.author))
         elif args.command == "toggle-plugin":
             emit(toggle_plugin(args.plugin_id, args.state == "on"))
         elif args.command == "archive":

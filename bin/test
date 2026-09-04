@@ -105,6 +105,65 @@ def main() -> int:
             print("FAIL totals", snap["series"][0]["totals"])
             failures += 1
 
+        # tracked authors seeded / listed
+        authors = ns["list_authors"]()
+        if not authors.get("ok") or not any(a["key"] == "mtolhuys" for a in authors.get("authors") or []):
+            print("FAIL authors list", authors)
+            failures += 1
+        if not snap.get("authors"):
+            print("FAIL snapshot missing authors", snap.get("authors"))
+            failures += 1
+
+        # add second author, ensure filter isolates series
+        other = {
+            "id": "io.github.other.demo",
+            "name": "Other Demo",
+            "author": "Other Author",
+            "repo": "https://github.com/other/demo",
+            "listedAt": "2026-08-01T00:00:00Z",
+        }
+        catalog2 = dict(catalog)
+        catalog2["plugins"] = list(catalog["plugins"]) + [other]
+        stats2 = dict(stats)
+        stats2["plugins"] = dict(stats["plugins"])
+        stats2["plugins"]["io.github.other.demo"] = {"views": 9, "copies": 1, "hearts": 0}
+        cat_path.write_text(json.dumps(catalog2))
+        stats_path.write_text(json.dumps(stats2))
+        add = ns["add_author"]("other")
+        if not add.get("ok") or add.get("author") != "other":
+            print("FAIL add-author", add)
+            failures += 1
+        collected = ns["collect"]("other")
+        if collected.get("matched") != 1:
+            print("FAIL collect other matched", collected)
+            failures += 1
+        snap_other = ns["query_series"](ns["connect"](), resolution="daily")
+        ids = [s["id"] for s in snap_other.get("series") or []]
+        if ids != ["io.github.other.demo"]:
+            print("FAIL author filter series", ids)
+            failures += 1
+        # switch back and delete other
+        ns["set_author"]("mtolhuys")
+        deleted = ns["delete_author"]("other")
+        if not deleted.get("ok"):
+            print("FAIL delete-author", deleted)
+            failures += 1
+        remaining_keys = [a["key"] for a in deleted.get("authors") or []]
+        if "other" in remaining_keys:
+            print("FAIL other still tracked", deleted)
+            failures += 1
+        snap_after = ns["query_series"](ns["connect"](), resolution="daily")
+        ids_after = [s["id"] for s in snap_after.get("series") or []]
+        if "io.github.other.demo" in ids_after:
+            print("FAIL purged plugin still in snapshot", ids_after)
+            failures += 1
+
+        # plugin_matches_author_row
+        row = {"id": plugin["id"], "name": plugin["name"], "author": plugin["author"], "repo": plugin["repo"]}
+        if not ns["plugin_matches_author_row"](row, "mtolhuys"):
+            print("FAIL plugin_matches_author_row")
+            failures += 1
+
     # manifest sanity
     manifest = json.loads((ROOT / "manifest.json").read_text())
     for key in ("id", "entryPoints", "kinds", "keepLoaded", "barWidget"):

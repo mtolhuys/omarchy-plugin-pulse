@@ -14,6 +14,7 @@ function emptySnapshot() {
   return {
     ok: false,
     author: "mtolhuys",
+    authors: [],
     resolution: "daily",
     stepSeconds: 86400,
     rangeStart: 0,
@@ -49,6 +50,7 @@ function parseSnapshot(raw) {
   return {
     ok: true,
     author: String(parsed.author || "mtolhuys"),
+    authors: Array.isArray(parsed.authors) ? parsed.authors : [],
     resolution: String(parsed.resolution || "daily"),
     stepSeconds: Number(parsed.stepSeconds || 86400),
     rangeStart: Number(parsed.rangeStart || 0),

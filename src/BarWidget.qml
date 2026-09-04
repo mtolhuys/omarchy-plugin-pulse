@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v010"
+  readonly property string buildIdentity: "plugin-pulse-widget-v011"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -37,6 +37,8 @@ BarWidget {
   property string authorEdit: "mtolhuys"
   property bool settingsOpen: false
   property bool confirmClear: false
+  property string confirmDeleteAuthor: ""
+  property string authorAddDraft: ""
 
   readonly property bool opened: popupOpen
   readonly property bool popoutSwitchClosing: false
@@ -54,6 +56,8 @@ BarWidget {
   function close() {
     settingsOpen = false
     confirmClear = false
+    confirmDeleteAuthor = ""
+    authorAddDraft = ""
     popupOpen = false
   }
   function closeForPopoutSwitch() { close() }
@@ -75,6 +79,43 @@ BarWidget {
     if (!pulseService) return
     pulseService.setAuthor(authorEdit)
     settingsOpen = false
+  }
+
+  function selectAuthor(key) {
+    if (!pulseService) return
+    var author = String(key || "").trim()
+    if (!author) return
+    authorEdit = author
+    confirmDeleteAuthor = ""
+    pulseService.setAuthor(author)
+  }
+
+  function addTrackedAuthor() {
+    if (!pulseService) return
+    var author = String(authorAddDraft || "").trim()
+    if (!author) return
+    authorEdit = author
+    authorAddDraft = ""
+    confirmDeleteAuthor = ""
+    pulseService.addAuthor(author)
+  }
+
+  function requestDeleteAuthor(key) {
+    var author = String(key || "").trim()
+    if (!author) return
+    if (confirmDeleteAuthor === author) {
+      confirmDeleteAuthor = ""
+      if (pulseService) pulseService.deleteAuthor(author)
+      return
+    }
+    confirmDeleteAuthor = author
+  }
+
+  function chipLabel(name, id) {
+    var label = Model.shortPluginName(name, id)
+    if (label.length > 22)
+      return label.slice(0, 21) + "…"
+    return label
   }
 
   function togglePlugin(pluginId, enabled) {
@@ -124,7 +165,7 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   onAuthorValueChanged: {
-    if (!authorField.activeFocus) authorEdit = authorValue || authorEdit
+    if (!authorAddField.activeFocus) authorEdit = authorValue || authorEdit
   }
 
   WidgetButton {
@@ -162,9 +203,9 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    focusTarget: root.settingsOpen ? authorField : panelScroll
-    contentWidth: popup.fittedContentWidth(Style.space(520))
-    contentHeight: popup.fittedContentHeight(Math.min(panelColumn.implicitHeight, Style.space(560)))
+    focusTarget: root.settingsOpen ? authorAddField : panelScroll
+    contentWidth: popup.fittedContentWidth(Style.space(480))
+    contentHeight: popup.fittedContentHeight(Math.min(panelColumn.implicitHeight, Style.space(500)))
 
     Flickable {
       id: panelScroll
@@ -173,15 +214,17 @@ BarWidget {
       contentHeight: panelColumn.implicitHeight
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      interactive: contentHeight > height
-      QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
+      interactive: contentHeight > height + 1
+      QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
+      QQC.ScrollBar.horizontal: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
       focus: true
 
       Shortcut {
         sequence: "Escape"
         context: Qt.WindowShortcut
         onActivated: {
-          if (root.confirmClear) root.confirmClear = false
+          if (root.confirmDeleteAuthor) root.confirmDeleteAuthor = ""
+          else if (root.confirmClear) root.confirmClear = false
           else if (root.settingsOpen) root.settingsOpen = false
           else root.close()
         }
@@ -190,7 +233,7 @@ BarWidget {
       Column {
         id: panelColumn
         width: panelScroll.width
-        spacing: Style.space(6)
+        spacing: Style.space(5)
 
         Row {
           width: parent.width
@@ -309,7 +352,7 @@ BarWidget {
         BorderSurface {
           visible: root.settingsOpen
           width: parent.width
-          implicitHeight: settingsColumn.implicitHeight + Style.space(18)
+          implicitHeight: settingsColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -319,12 +362,12 @@ BarWidget {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: Style.space(9)
-            spacing: Style.space(8)
+            anchors.margins: Style.space(8)
+            spacing: Style.space(6)
 
             Text {
               width: parent.width
-              text: "Marketplace author filter"
+              text: "Authors"
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -334,37 +377,72 @@ BarWidget {
 
             Text {
               width: parent.width
-              text: "Matches author name, plugin id, or repository URL. Default is mtolhuys."
+              text: "Select to switch · × deletes that author’s stored plugins"
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
+              elide: Text.ElideRight
               textFormat: Text.PlainText
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(5)
+
+              Repeater {
+                model: root.snapshot.authors || []
+
+                delegate: Row {
+                  required property var modelData
+                  spacing: Style.space(3)
+
+                  Button {
+                    text: (modelData.active ? "✓ " : "") + Model.safeLabel(modelData.key)
+                    selected: modelData.active === true
+                    bordered: modelData.active === true
+                    focusable: true
+                    tooltipText: modelData.pluginCount + " plugins · " + modelData.sampleCount + " samples"
+                    onClicked: root.selectAuthor(modelData.key)
+                  }
+
+                  Button {
+                    text: root.confirmDeleteAuthor === String(modelData.key) ? "!" : "×"
+                    bordered: root.confirmDeleteAuthor === String(modelData.key)
+                    foreground: Color.urgent
+                    accent: Color.urgent
+                    focusable: true
+                    tooltipText: root.confirmDeleteAuthor === String(modelData.key)
+                      ? "Click again to purge " + modelData.key
+                      : "Delete " + modelData.key
+                    onClicked: root.requestDeleteAuthor(modelData.key)
+                  }
+                }
+              }
             }
 
             Row {
               width: parent.width
-              spacing: Style.space(8)
+              spacing: Style.space(6)
 
               TextField {
-                id: authorField
-                width: parent.width - saveAuthorButton.width - Style.space(8)
-                text: root.authorEdit
-                placeholderText: "mtolhuys"
+                id: authorAddField
+                width: parent.width - addAuthorButton.width - Style.space(6)
+                text: root.authorAddDraft
+                placeholderText: "add author"
                 selectByMouse: true
-                Accessible.name: "Author filter"
-                onTextEdited: root.authorEdit = text
-                onAccepted: root.saveAuthor()
-                TapHandler { onTapped: authorField.forceActiveFocus() }
+                Accessible.name: "Add author"
+                onTextEdited: root.authorAddDraft = text
+                onAccepted: root.addTrackedAuthor()
+                TapHandler { onTapped: authorAddField.forceActiveFocus() }
               }
 
               Button {
-                id: saveAuthorButton
-                text: "Save"
+                id: addAuthorButton
+                text: "Add"
                 bordered: true
                 selected: true
                 focusable: true
-                onClicked: root.saveAuthor()
+                onClicked: root.addTrackedAuthor()
               }
             }
           }
@@ -372,7 +450,7 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          height: Style.space(160)
+          height: root.settingsOpen ? Style.space(110) : Style.space(150)
           color: Util.alpha(Color.popups.text, 0.035)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -392,7 +470,7 @@ BarWidget {
 
         Column {
           width: parent.width
-          spacing: Style.space(6)
+          spacing: Style.space(5)
 
           Text {
             width: parent.width
@@ -406,7 +484,7 @@ BarWidget {
 
           Flow {
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(5)
 
             Repeater {
               model: root.snapshot.plugins || []
@@ -414,12 +492,12 @@ BarWidget {
               delegate: Row {
                 required property var modelData
                 required property int index
-                spacing: Style.space(6)
+                spacing: Style.space(4)
 
                 Rectangle {
                   anchors.verticalCenter: parent.verticalCenter
-                  width: 9
-                  height: 9
+                  width: 8
+                  height: 8
                   radius: width / 2
                   color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
                   opacity: modelData.enabled === true ? 1 : 0.35
@@ -427,10 +505,11 @@ BarWidget {
 
                 Button {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: Model.shortPluginName(modelData.name, modelData.id)
+                  text: root.chipLabel(modelData.name, modelData.id)
                   selected: modelData.enabled === true
                   focusable: true
-                  tooltipText: modelData.enabled ? "Hide from chart" : "Show on chart"
+                  tooltipText: Model.shortPluginName(modelData.name, modelData.id)
+                    + (modelData.enabled ? " · hide" : " · show")
                   onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
                 }
               }
@@ -541,7 +620,7 @@ BarWidget {
 
                   Text {
                     width: parent.width * 0.42 - Style.space(8) - 8
-                    text: Model.safeLabel(Model.shortPluginName(modelData.name, modelData.id))
+                    text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
                     color: Color.popups.text
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
@@ -586,87 +665,71 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          implicitHeight: storageColumn.implicitHeight + Style.space(12)
+          implicitHeight: storageRow.implicitHeight + Style.space(10)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
 
-          Column {
-            id: storageColumn
+          Row {
+            id: storageRow
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: Style.space(9)
-            spacing: Style.space(8)
+            anchors.margins: Style.space(8)
+            spacing: Style.space(6)
 
-            Row {
-              width: parent.width
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - archiveButton.width - clearButton.width
+                - (root.confirmClear ? cancelClearButton.width + Style.space(12) : Style.space(12))
+              text: Model.formatBytes(root.snapshot.dbBytes) + " · "
+                + Model.safeLabel(root.authorValue)
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideMiddle
+              textFormat: Text.PlainText
+            }
 
-              Column {
-                width: parent.width - Style.space(8)
-                spacing: Style.space(2)
+            Button {
+              id: archiveButton
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Archive"
+              focusable: true
+              tooltipText: "Copy DB to archive and drop estimated seed points"
+              enabled: !!root.pulseService && !root.busy
+              opacity: enabled ? 1 : 0.35
+              onClicked: if (root.pulseService) root.pulseService.archiveHistory()
+            }
 
-                Text {
-                  width: parent.width
-                  text: "Local history store"
-                  color: Color.popups.text
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                  textFormat: Text.PlainText
+            Button {
+              id: clearButton
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.confirmClear ? "Confirm" : "Clear"
+              bordered: root.confirmClear
+              foreground: root.confirmClear ? Color.urgent : Color.popups.text
+              accent: root.confirmClear ? Color.urgent : Color.accent
+              focusable: true
+              tooltipText: "Delete all stored samples"
+              enabled: !!root.pulseService && !root.busy
+              opacity: enabled ? 1 : 0.35
+              onClicked: {
+                if (!root.confirmClear) {
+                  root.confirmClear = true
+                  return
                 }
-
-                Text {
-                  width: parent.width
-                  text: Model.formatBytes(root.snapshot.dbBytes) + "  ·  author “"
-                    + Model.safeLabel(root.authorValue) + "”"
-                  color: Color.muted
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideMiddle
-                  textFormat: Text.PlainText
-                }
+                root.confirmClear = false
+                if (root.pulseService) root.pulseService.clearHistory()
               }
             }
 
-            Row {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Button {
-                text: "Archive"
-                focusable: true
-                tooltipText: "Copy DB to archive and drop estimated seed points"
-                enabled: !!root.pulseService && !root.busy
-                opacity: enabled ? 1 : 0.35
-                onClicked: if (root.pulseService) root.pulseService.archiveHistory()
-              }
-
-              Button {
-                text: root.confirmClear ? "Confirm clear" : "Clear"
-                bordered: root.confirmClear
-                foreground: root.confirmClear ? Color.urgent : Color.popups.text
-                accent: root.confirmClear ? Color.urgent : Color.accent
-                focusable: true
-                tooltipText: "Delete all stored samples"
-                enabled: !!root.pulseService && !root.busy
-                opacity: enabled ? 1 : 0.35
-                onClicked: {
-                  if (!root.confirmClear) {
-                    root.confirmClear = true
-                    return
-                  }
-                  root.confirmClear = false
-                  if (root.pulseService) root.pulseService.clearHistory()
-                }
-              }
-
-              Button {
-                visible: root.confirmClear
-                text: "Cancel"
-                focusable: true
-                onClicked: root.confirmClear = false
-              }
+            Button {
+              id: cancelClearButton
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.confirmClear
+              text: "Cancel"
+              focusable: true
+              onClicked: root.confirmClear = false
             }
           }
         }
