@@ -114,17 +114,14 @@ BarWidget {
     if (!authorField.activeFocus) authorEdit = authorValue || authorEdit
   }
 
-  WidgetButton {
+  BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: ""
-    labelVisible: false
-    hasVisualContent: true
-    tooltipText: "Plugin Pulse — " + root.statusLabel()
-    active: root.estimated
+    iconComponent: pulseIcon
+    active: root.estimated || root.collecting
     activeColor: Color.accent
-    fixedWidth: root.barSize
+    tooltipText: "Plugin Pulse — " + root.statusLabel() + " · left open · middle refresh"
     Accessible.name: "Plugin Pulse"
     Accessible.role: Accessible.Button
 
@@ -133,45 +130,47 @@ BarWidget {
       else root.toggle()
     }
 
-    Item {
-      width: Math.min(parent.width, parent.height) * 0.56
+    // Live collect marker — never the only visible affordance.
+    Rectangle {
+      visible: root.collecting
+      z: 2
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.rightMargin: Style.space(2)
+      anchors.topMargin: Style.space(2)
+      width: Style.space(6)
       height: width
-      anchors.centerIn: parent
+      radius: width / 2
+      color: Color.accent
+      border.width: 1
+      border.color: Color.background
+    }
+  }
 
-      Canvas {
-        id: iconCanvas
-        anchors.fill: parent
-        antialiasing: true
-        onPaint: {
-          var ctx = getContext("2d")
-          ctx.reset()
-          var stroke = button.foreground
-          ctx.strokeStyle = stroke
-          ctx.fillStyle = "transparent"
-          ctx.lineWidth = Math.max(1.2, width * 0.08)
-          ctx.lineJoin = "round"
-          ctx.lineCap = "round"
-          var w = width
-          var h = height
-          ctx.beginPath()
-          ctx.moveTo(w * 0.08, h * 0.62)
-          ctx.lineTo(w * 0.28, h * 0.62)
-          ctx.lineTo(w * 0.40, h * 0.28)
-          ctx.lineTo(w * 0.55, h * 0.72)
-          ctx.lineTo(w * 0.68, h * 0.42)
-          ctx.lineTo(w * 0.92, h * 0.42)
-          ctx.stroke()
+  Component {
+    id: pulseIcon
+    // Solid bars (not Canvas) so the glyph always paints in the bar.
+    Item {
+      id: glyph
+      readonly property color ink: button.active ? button.activeColor : button.foreground
+
+      Row {
+        id: bars
+        anchors.centerIn: parent
+        spacing: Math.max(1.5, glyph.width * 0.08)
+        height: glyph.height * 0.72
+
+        Repeater {
+          model: [0.42, 0.92, 0.62, 0.78]
+          delegate: Rectangle {
+            required property real modelData
+            width: Math.max(2.5, glyph.width * 0.14)
+            height: bars.height * modelData
+            anchors.bottom: parent.bottom
+            radius: 1
+            color: glyph.ink
+          }
         }
-      }
-
-      Rectangle {
-        visible: root.collecting
-        anchors.right: parent.right
-        anchors.top: parent.top
-        width: Math.max(4, parent.width * 0.18)
-        height: width
-        radius: width / 2
-        color: Color.accent
       }
     }
   }
