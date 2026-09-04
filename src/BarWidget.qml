@@ -114,64 +114,23 @@ BarWidget {
     if (!authorField.activeFocus) authorEdit = authorValue || authorEdit
   }
 
-  BarIconButton {
+  // Plain text — always readable in the bar (no Canvas / custom glyph).
+  WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    iconComponent: pulseIcon
+    text: "Pulse"
+    labelVisible: true
+    hasVisualContent: true
+    tooltipText: "Plugin Pulse — " + root.statusLabel() + " · left open · middle refresh"
     active: root.estimated || root.collecting
     activeColor: Color.accent
-    tooltipText: "Plugin Pulse — " + root.statusLabel() + " · left open · middle refresh"
     Accessible.name: "Plugin Pulse"
     Accessible.role: Accessible.Button
 
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.refresh()
       else root.toggle()
-    }
-
-    // Live collect marker — never the only visible affordance.
-    Rectangle {
-      visible: root.collecting
-      z: 2
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.rightMargin: Style.space(2)
-      anchors.topMargin: Style.space(2)
-      width: Style.space(6)
-      height: width
-      radius: width / 2
-      color: Color.accent
-      border.width: 1
-      border.color: Color.background
-    }
-  }
-
-  Component {
-    id: pulseIcon
-    // Solid bars (not Canvas) so the glyph always paints in the bar.
-    Item {
-      id: glyph
-      readonly property color ink: button.active ? button.activeColor : button.foreground
-
-      Row {
-        id: bars
-        anchors.centerIn: parent
-        spacing: Math.max(1.5, glyph.width * 0.08)
-        height: glyph.height * 0.72
-
-        Repeater {
-          model: [0.42, 0.92, 0.62, 0.78]
-          delegate: Rectangle {
-            required property real modelData
-            width: Math.max(2.5, glyph.width * 0.14)
-            height: bars.height * modelData
-            anchors.bottom: parent.bottom
-            radius: 1
-            color: glyph.ink
-          }
-        }
-      }
     }
   }
 
