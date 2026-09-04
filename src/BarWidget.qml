@@ -252,43 +252,6 @@ BarWidget {
           }
         }
 
-        BorderSurface {
-          visible: root.estimated
-          width: parent.width
-          implicitHeight: estimateRow.implicitHeight + Style.space(10)
-          color: Util.alpha(Color.accent, 0.08)
-          borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
-          radius: Style.cornerRadius
-
-          Row {
-            id: estimateRow
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: Style.space(9)
-            spacing: Style.space(8)
-
-            Text {
-              text: "≈"
-              color: Color.accent
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              font.bold: true
-              textFormat: Text.PlainText
-            }
-
-            Text {
-              width: parent.width - parent.children[0].width - Style.space(8)
-              text: "Estimated history until the first live sample."
-              color: Color.popups.text
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-              textFormat: Text.PlainText
-            }
-          }
-        }
-
         Row {
           width: parent.width
           spacing: Style.space(6)
