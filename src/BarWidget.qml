@@ -18,7 +18,16 @@ BarWidget {
   readonly property bool collecting: pulseService && pulseService.collectState === "collecting"
   readonly property bool busy: collecting
   readonly property string activeMetric: metric
-  readonly property var chartSeries: Model.chartSeries(snapshot, activeMetric, null)
+  readonly property var enabledPluginIds: {
+    var ids = []
+    var plugins = snapshot.plugins || []
+    for (var i = 0; i < plugins.length; i++) {
+      if (plugins[i] && plugins[i].enabled === true)
+        ids.push(plugins[i].id)
+    }
+    return ids
+  }
+  readonly property var chartSeries: Model.chartSeries(snapshot, activeMetric, enabledPluginIds)
   readonly property bool estimated: snapshot.hasEstimatedHistory === true
   readonly property string authorValue: pulseService ? String(pulseService.authorDraft || snapshot.author || "") : ""
   readonly property string resolutionValue: pulseService ? String(pulseService.resolution || "daily") : "daily"
@@ -440,7 +449,7 @@ BarWidget {
                   width: 9
                   height: 9
                   radius: width / 2
-                  color: root.colorForKey(Model.seriesPalette(index))
+                  color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
                   opacity: modelData.enabled === true ? 1 : 0.35
                 }
 
@@ -555,7 +564,7 @@ BarWidget {
                     width: 8
                     height: 8
                     radius: width / 2
-                    color: root.colorForKey(Model.seriesPalette(index))
+                    color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
                   }
 
                   Text {

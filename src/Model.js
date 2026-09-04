@@ -112,9 +112,24 @@ function seriesPalette(index) {
   return palette[index % palette.length]
 }
 
+function colorForPluginId(id, plugins) {
+  var list = plugins || []
+  var needle = String(id || "")
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && String(list[i].id || "") === needle)
+      return seriesPalette(i)
+  }
+  // Stable fallback if id is missing from plugins list.
+  var h = 0
+  for (var j = 0; j < needle.length; j++)
+    h = ((h << 5) - h) + needle.charCodeAt(j)
+  return seriesPalette(Math.abs(h))
+}
+
 function chartSeries(snapshot, metric, enabledIds) {
   var out = []
   var series = snapshot && Array.isArray(snapshot.series) ? snapshot.series : []
+  var plugins = snapshot && Array.isArray(snapshot.plugins) ? snapshot.plugins : []
   var allow = enabledIds && enabledIds.length ? enabledIds : null
   for (var i = 0; i < series.length; i++) {
     var item = series[i]
@@ -124,7 +139,7 @@ function chartSeries(snapshot, metric, enabledIds) {
     out.push({
       id: item.id,
       name: shortPluginName(item.name, item.id),
-      colorKey: seriesPalette(i),
+      colorKey: colorForPluginId(item.id, plugins),
       points: points
     })
   }
