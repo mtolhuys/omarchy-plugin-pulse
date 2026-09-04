@@ -164,7 +164,7 @@ BarWidget {
     open: root.popupOpen
     focusTarget: root.settingsOpen ? authorField : panelScroll
     contentWidth: popup.fittedContentWidth(Style.space(520))
-    contentHeight: popup.fittedContentHeight(Math.min(panelColumn.implicitHeight, Style.space(640)))
+    contentHeight: popup.fittedContentHeight(Math.min(panelColumn.implicitHeight, Style.space(560)))
 
     Flickable {
       id: panelScroll
@@ -190,14 +190,14 @@ BarWidget {
       Column {
         id: panelColumn
         width: panelScroll.width
-        spacing: Style.space(9)
+        spacing: Style.space(6)
 
         Row {
           width: parent.width
           spacing: Style.space(10)
 
           BorderSurface {
-            width: Style.space(36)
+            width: Style.space(28)
             height: width
             color: Style.selectedFillFor(Color.accent, Color.accent)
             borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
@@ -215,7 +215,7 @@ BarWidget {
           }
 
           Column {
-            width: parent.width - Style.space(36) - Style.space(10) - refreshButton.width
+            width: parent.width - Style.space(28) - Style.space(10) - refreshButton.width
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
 
@@ -255,7 +255,7 @@ BarWidget {
         BorderSurface {
           visible: root.estimated
           width: parent.width
-          implicitHeight: estimateRow.implicitHeight + Style.space(16)
+          implicitHeight: estimateRow.implicitHeight + Style.space(10)
           color: Util.alpha(Color.accent, 0.08)
           borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
           radius: Style.cornerRadius
@@ -279,7 +279,7 @@ BarWidget {
 
             Text {
               width: parent.width - parent.children[0].width - Style.space(8)
-              text: "Estimated history — smooth curves seeded from each plugin’s listing date until the first live observation."
+              text: "Estimated history until the first live sample."
               color: Color.popups.text
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -409,7 +409,7 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          height: Style.space(220)
+          height: Style.space(160)
           color: Util.alpha(Color.popups.text, 0.035)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -477,7 +477,7 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          implicitHeight: totalsColumn.implicitHeight + Style.space(18)
+          implicitHeight: totalsColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
@@ -623,7 +623,7 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          implicitHeight: storageColumn.implicitHeight + Style.space(18)
+          implicitHeight: storageColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
