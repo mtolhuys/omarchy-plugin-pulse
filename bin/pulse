@@ -1,0 +1,840 @@
+#!/usr/bin/env python3
+"""Omarchy Plugin Pulse — local collector, history store, and UI snapshot helper.
+
+Uses only the Python 3 standard library (sqlite3, urllib, json, argparse).
+All network requests are HTTPS and origin-allowlisted.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import sqlite3
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlsplit
+
+PLUGIN_ID = "io.github.mtolhuys.plugin-pulse"
+USER_AGENT = "OmarchyPluginPulse/0.1.0 (+https://github.com/mtolhuys/omarchy-plugin-pulse)"
+CATALOG_URL = (
+    "https://raw.githubusercontent.com/omacom/omarchy-plugin-marketplace"
+    "/main/site/catalog.json"
+)
+STATS_URL = "https://api.omarchyplugins.com/v1/stats"
+ALLOWED_ORIGINS = frozenset(
+    {
+        "https://raw.githubusercontent.com",
+        "https://api.omarchyplugins.com",
+    }
+)
+DEFAULT_AUTHOR = "mtolhuys"
+METRICS = ("views", "copies", "hearts")
+MAX_DB_BYTES = 8 * 1024 * 1024
+MAX_RESPONSE_BYTES = 12 * 1024 * 1024
+HTTP_TIMEOUT = 25.0
+MAX_REDIRECTS = 2
+SEED_POINTS = 48
+
+# Retention windows (seconds)
+HOURLY_KEEP = 72 * 3600
+DAILY_KEEP = 90 * 86400
+WEEKLY_KEEP = 730 * 86400  # ~2 years
+MONTHLY_KEEP = 10 * 365 * 86400
+
+RESOLUTION_STEPS = {
+    "hourly": 3600,
+    "daily": 86400,
+    "weekly": 7 * 86400,
+    "monthly": 30 * 86400,
+}
+
+
+class PulseError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def state_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    path = Path(base) / "omarchy-plugin-pulse"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def db_path() -> Path:
+    return state_dir() / "pulse.sqlite"
+
+
+def archive_dir() -> Path:
+    path = state_dir() / "archive"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path()))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    ensure_schema(conn)
+    return conn
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS config (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS plugins (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          author TEXT NOT NULL,
+          repo TEXT,
+          listed_at TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          plugin_id TEXT NOT NULL,
+          metric TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          value INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('seed', 'observe')),
+          UNIQUE(plugin_id, metric, ts)
+        );
+        CREATE INDEX IF NOT EXISTS idx_samples_lookup
+          ON samples(plugin_id, metric, ts);
+        CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);
+        """
+    )
+    if get_config(conn, "author") is None:
+        set_config(conn, "author", DEFAULT_AUTHOR)
+    if get_config(conn, "seed_notice") is None:
+        set_config(conn, "seed_notice", "1")
+    conn.commit()
+
+
+def get_config(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row["value"])
+
+
+def set_config(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO config(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def _allowed_url(url: str) -> bool:
+    parsed = urlsplit(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return (
+        parsed.scheme == "https"
+        and origin in ALLOWED_ORIGINS
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+class ClosedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self) -> None:
+        self.redirects = 0
+
+    def redirect_request(self, request, response, code, message, headers, new_url):  # type: ignore[no-untyped-def]
+        self.redirects += 1
+        resolved = urljoin(request.full_url, new_url)
+        if self.redirects > MAX_REDIRECTS or not _allowed_url(resolved):
+            raise PulseError("http-error", "redirect left the allowlisted HTTPS origin")
+        return super().redirect_request(request, response, code, message, headers, resolved)
+
+
+def fetch_json(url: str, *, file_override: str | None = None) -> Any:
+    if file_override:
+        raw = Path(file_override).read_bytes()
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise PulseError("too-large", "response exceeds size bound")
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PulseError("invalid-json", "response was not valid UTF-8 JSON") from exc
+    if not _allowed_url(url):
+        raise PulseError("validation-failed", "request URL is outside the allowlist")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    opener = urllib.request.build_opener(
+        ClosedRedirectHandler(),
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+    )
+    started = time.monotonic()
+    try:
+        with opener.open(request, timeout=HTTP_TIMEOUT) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    declared = int(content_length)
+                except ValueError as exc:
+                    raise PulseError("http-error", "invalid Content-Length") from exc
+                if declared < 0 or declared > MAX_RESPONSE_BYTES:
+                    raise PulseError("too-large", "response exceeds size bound")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                if time.monotonic() - started > HTTP_TIMEOUT:
+                    raise PulseError("timeout", "request exceeded its total timeout")
+                chunk = response.read(min(64 * 1024, MAX_RESPONSE_BYTES + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_RESPONSE_BYTES:
+                    raise PulseError("too-large", "response exceeds size bound")
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+    except PulseError:
+        raise
+    except urllib.error.HTTPError as exc:
+        code = int(exc.code)
+        exc.close()
+        raise PulseError("http-error", f"server returned HTTP {code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        detail = str(getattr(exc, "reason", exc)).lower()
+        reason = "timeout" if "timed out" in detail else "network-error"
+        raise PulseError(reason, "network request failed") from exc
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PulseError("invalid-json", "response was not valid UTF-8 JSON") from exc
+
+
+def matches_author(plugin: dict[str, Any], author_key: str) -> bool:
+    key = author_key.strip().lower()
+    if not key:
+        return False
+    haystacks = [
+        str(plugin.get("author") or ""),
+        str(plugin.get("id") or ""),
+        str(plugin.get("repo") or ""),
+        str(plugin.get("name") or ""),
+    ]
+    return any(key in value.lower() for value in haystacks)
+
+
+def parse_listed_at(value: Any) -> int | None:
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except ValueError:
+        return None
+
+
+def smoothstep(t: float) -> float:
+    t = max(0.0, min(1.0, t))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def seed_series(listed_ts: int, now_ts: int, final_value: int) -> list[tuple[int, int]]:
+    """Monotonic smooth curve from ~0 at listed_at to final_value at now."""
+    if final_value < 0:
+        final_value = 0
+    if now_ts <= listed_ts:
+        return [(now_ts, final_value)]
+    span = now_ts - listed_ts
+    count = max(8, min(SEED_POINTS, span // 3600 + 2))
+    points: list[tuple[int, int]] = []
+    for i in range(count):
+        t = i / (count - 1)
+        ts = listed_ts + int(round(span * t))
+        value = int(round(final_value * smoothstep(t)))
+        if points and points[-1][0] == ts:
+            points[-1] = (ts, max(points[-1][1], value))
+        else:
+            points.append((ts, value))
+    # Ensure last point matches observed total exactly.
+    points[-1] = (now_ts, final_value)
+    # Enforce non-decreasing integers.
+    running = 0
+    fixed: list[tuple[int, int]] = []
+    for ts, value in points:
+        running = max(running, value)
+        fixed.append((ts, running))
+    fixed[-1] = (now_ts, final_value if final_value >= fixed[-2][1] else max(fixed[-2][1], final_value))
+    # Re-fix monotonic end
+    running = 0
+    out: list[tuple[int, int]] = []
+    for ts, value in fixed:
+        running = max(running, min(value, final_value) if ts < now_ts else final_value)
+        if ts == now_ts:
+            running = final_value
+        out.append((ts, running))
+    return out
+
+
+def upsert_plugin(
+    conn: sqlite3.Connection,
+    *,
+    plugin_id: str,
+    name: str,
+    author: str,
+    repo: str | None,
+    listed_at: str | None,
+    now_ts: int,
+) -> None:
+    existing = conn.execute(
+        "SELECT enabled FROM plugins WHERE id = ?", (plugin_id,)
+    ).fetchone()
+    enabled = 1 if existing is None else int(existing["enabled"])
+    conn.execute(
+        """
+        INSERT INTO plugins(id, name, author, repo, listed_at, enabled, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          author = excluded.author,
+          repo = excluded.repo,
+          listed_at = COALESCE(excluded.listed_at, plugins.listed_at),
+          updated_at = excluded.updated_at
+        """,
+        (plugin_id, name, author, repo, listed_at, enabled, now_ts),
+    )
+
+
+def has_observe(conn: sqlite3.Connection, plugin_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM samples WHERE plugin_id = ? AND source = 'observe' LIMIT 1",
+        (plugin_id,),
+    ).fetchone()
+    return row is not None
+
+
+def insert_sample(
+    conn: sqlite3.Connection,
+    plugin_id: str,
+    metric: str,
+    ts: int,
+    value: int,
+    source: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO samples(plugin_id, metric, ts, value, source)
+        VALUES(?, ?, ?, ?, ?)
+        ON CONFLICT(plugin_id, metric, ts) DO UPDATE SET
+          value = excluded.value,
+          source = CASE
+            WHEN samples.source = 'observe' THEN 'observe'
+            ELSE excluded.source
+          END
+        """,
+        (plugin_id, metric, ts, int(value), source),
+    )
+
+
+def collect(author: str | None = None) -> dict[str, Any]:
+    conn = connect()
+    try:
+        author_key = (author or get_config(conn, "author") or DEFAULT_AUTHOR).strip()
+        if author:
+            set_config(conn, "author", author_key)
+        now_ts = int(time.time())
+        catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
+        stats = fetch_json(STATS_URL, file_override=os.environ.get("PULSE_STATS_FILE"))
+        if not isinstance(catalog, dict) or not isinstance(catalog.get("plugins"), list):
+            raise PulseError("invalid-json", "catalog shape is unsupported")
+        if not isinstance(stats, dict) or stats.get("schemaVersion") != 1:
+            raise PulseError("invalid-json", "stats schemaVersion is unsupported")
+        raw_stats = stats.get("plugins")
+        if not isinstance(raw_stats, dict):
+            raise PulseError("invalid-json", "stats plugins map is invalid")
+
+        matched: list[dict[str, Any]] = []
+        for item in catalog["plugins"]:
+            if not isinstance(item, dict):
+                continue
+            if not matches_author(item, author_key):
+                continue
+            plugin_id = str(item.get("id") or "").strip()
+            if not plugin_id:
+                continue
+            matched.append(item)
+
+        seeded = 0
+        observed = 0
+        for item in matched:
+            plugin_id = str(item["id"])
+            name = str(item.get("name") or plugin_id)
+            plugin_author = str(item.get("author") or "")
+            repo = str(item.get("repo") or "") or None
+            listed_raw = item.get("listedAt") or item.get("addedAt")
+            listed_at = str(listed_raw) if listed_raw else None
+            listed_ts = parse_listed_at(listed_at) or (now_ts - 14 * 86400)
+            upsert_plugin(
+                conn,
+                plugin_id=plugin_id,
+                name=name,
+                author=plugin_author,
+                repo=repo,
+                listed_at=listed_at,
+                now_ts=now_ts,
+            )
+            metrics = raw_stats.get(plugin_id) or {}
+            if not isinstance(metrics, dict):
+                metrics = {}
+            values = {
+                "views": int(metrics.get("views") or 0),
+                "copies": int(metrics.get("copies") or 0),
+                "hearts": int(metrics.get("hearts") or 0),
+            }
+            first_time = not has_observe(conn, plugin_id)
+            if first_time:
+                for metric in METRICS:
+                    for ts, value in seed_series(listed_ts, now_ts, values[metric]):
+                        # Keep the terminal seed point as observe below.
+                        if ts >= now_ts:
+                            continue
+                        insert_sample(conn, plugin_id, metric, ts, value, "seed")
+                        seeded += 1
+            for metric in METRICS:
+                insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
+                observed += 1
+
+        set_config(conn, "last_collect_at", str(now_ts))
+        set_config(conn, "last_collect_author", author_key)
+        set_config(conn, "last_collect_count", str(len(matched)))
+        if seeded:
+            set_config(conn, "seed_notice", "1")
+        prune(conn, now_ts)
+        enforce_size_cap(conn)
+        conn.commit()
+        return {
+            "ok": True,
+            "author": author_key,
+            "matched": len(matched),
+            "seededPoints": seeded,
+            "observedPoints": observed,
+            "collectedAt": now_ts,
+            "dbBytes": db_size_bytes(),
+            "hasEstimatedHistory": has_seed_data(conn),
+        }
+    finally:
+        conn.close()
+
+
+def has_seed_data(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM samples WHERE source = 'seed' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def bucket_floor(ts: int, step: int) -> int:
+    return ts - (ts % step)
+
+
+def prune(conn: sqlite3.Connection, now_ts: int) -> None:
+    """Collapse older samples into coarser buckets and drop ancient rows."""
+    # Drop anything older than monthly retention.
+    cutoff_month = now_ts - MONTHLY_KEEP
+    conn.execute("DELETE FROM samples WHERE ts < ?", (cutoff_month,))
+
+    # For each age band, keep one sample per bucket (prefer observe, then latest).
+    bands = [
+        (now_ts - HOURLY_KEEP, now_ts, 3600),
+        (now_ts - DAILY_KEEP, now_ts - HOURLY_KEEP, 86400),
+        (now_ts - WEEKLY_KEEP, now_ts - DAILY_KEEP, 7 * 86400),
+        (cutoff_month, now_ts - WEEKLY_KEEP, 30 * 86400),
+    ]
+    for start, end, step in bands:
+        if end <= start:
+            continue
+        rows = conn.execute(
+            """
+            SELECT id, plugin_id, metric, ts, value, source
+            FROM samples
+            WHERE ts >= ? AND ts < ?
+            ORDER BY plugin_id, metric, ts ASC, CASE source WHEN 'observe' THEN 0 ELSE 1 END
+            """,
+            (start, end),
+        ).fetchall()
+        keep_ids: set[int] = set()
+        best: dict[tuple[str, str, int], sqlite3.Row] = {}
+        for row in rows:
+            key = (row["plugin_id"], row["metric"], bucket_floor(int(row["ts"]), step))
+            prev = best.get(key)
+            if prev is None:
+                best[key] = row
+                continue
+            # Prefer observe; otherwise keep the later timestamp.
+            if prev["source"] != "observe" and row["source"] == "observe":
+                best[key] = row
+            elif prev["source"] == row["source"] and int(row["ts"]) >= int(prev["ts"]):
+                best[key] = row
+        for row in best.values():
+            keep_ids.add(int(row["id"]))
+        drop_ids = [int(row["id"]) for row in rows if int(row["id"]) not in keep_ids]
+        for i in range(0, len(drop_ids), 500):
+            chunk = drop_ids[i : i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(f"DELETE FROM samples WHERE id IN ({placeholders})", chunk)
+
+
+def db_size_bytes() -> int:
+    path = db_path()
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(str(path) + suffix) if suffix else path
+        if candidate.exists():
+            total += candidate.stat().st_size
+    return total
+
+
+def enforce_size_cap(conn: sqlite3.Connection) -> None:
+    """If over hard cap, drop oldest seed samples then oldest observe samples."""
+    for _ in range(8):
+        if db_size_bytes() <= MAX_DB_BYTES:
+            return
+        deleted = conn.execute(
+            """
+            DELETE FROM samples WHERE id IN (
+              SELECT id FROM samples WHERE source = 'seed'
+              ORDER BY ts ASC LIMIT 500
+            )
+            """
+        ).rowcount
+        conn.execute("VACUUM")
+        if deleted == 0:
+            break
+    for _ in range(8):
+        if db_size_bytes() <= MAX_DB_BYTES:
+            return
+        deleted = conn.execute(
+            """
+            DELETE FROM samples WHERE id IN (
+              SELECT id FROM samples ORDER BY ts ASC LIMIT 500
+            )
+            """
+        ).rowcount
+        conn.commit()
+        conn.execute("VACUUM")
+        if deleted == 0:
+            return
+
+
+def query_series(
+    conn: sqlite3.Connection,
+    *,
+    resolution: str,
+    plugin_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    step = RESOLUTION_STEPS.get(resolution, 3600)
+    now_ts = int(time.time())
+    if resolution == "hourly":
+        start_ts = now_ts - HOURLY_KEEP
+    elif resolution == "daily":
+        start_ts = now_ts - DAILY_KEEP
+    elif resolution == "weekly":
+        start_ts = now_ts - WEEKLY_KEEP
+    else:
+        start_ts = now_ts - MONTHLY_KEEP
+
+    plugins = conn.execute(
+        "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    if plugin_ids is not None:
+        wanted = set(plugin_ids)
+        plugins = [p for p in plugins if p["id"] in wanted]
+
+    series: list[dict[str, Any]] = []
+    any_seed = False
+    for plugin in plugins:
+        if not int(plugin["enabled"]):
+            # Still include disabled plugins in catalog for toggle UI, but skip series.
+            continue
+        plugin_id = plugin["id"]
+        metric_series: dict[str, list[dict[str, Any]]] = {m: [] for m in METRICS}
+        for metric in METRICS:
+            rows = conn.execute(
+                """
+                SELECT ts, value, source FROM samples
+                WHERE plugin_id = ? AND metric = ? AND ts >= ?
+                ORDER BY ts ASC
+                """,
+                (plugin_id, metric, start_ts),
+            ).fetchall()
+            buckets: dict[int, dict[str, Any]] = {}
+            for row in rows:
+                bucket = bucket_floor(int(row["ts"]), step)
+                prev = buckets.get(bucket)
+                point = {
+                    "t": bucket,
+                    "v": int(row["value"]),
+                    "source": row["source"],
+                }
+                if prev is None:
+                    buckets[bucket] = point
+                else:
+                    # Prefer observe; otherwise later value.
+                    if prev["source"] != "observe" and row["source"] == "observe":
+                        buckets[bucket] = point
+                    elif int(row["ts"]) >= prev["t"]:
+                        # keep latest value in bucket; preserve observe if mixed
+                        point["source"] = (
+                            "observe"
+                            if prev["source"] == "observe" or row["source"] == "observe"
+                            else row["source"]
+                        )
+                        buckets[bucket] = point
+            points = [buckets[k] for k in sorted(buckets)]
+            for point in points:
+                if point["source"] == "seed":
+                    any_seed = True
+            metric_series[metric] = points
+        latest = {}
+        for metric in METRICS:
+            pts = metric_series[metric]
+            latest[metric] = pts[-1]["v"] if pts else 0
+        series.append(
+            {
+                "id": plugin_id,
+                "name": plugin["name"],
+                "author": plugin["author"],
+                "repo": plugin["repo"],
+                "listedAt": plugin["listed_at"],
+                "enabled": bool(int(plugin["enabled"])),
+                "metrics": metric_series,
+                "totals": latest,
+            }
+        )
+
+    plugin_catalog = [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "author": p["author"],
+            "repo": p["repo"],
+            "listedAt": p["listed_at"],
+            "enabled": bool(int(p["enabled"])),
+        }
+        for p in conn.execute(
+            "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
+        )
+    ]
+
+    totals = {"views": 0, "copies": 0, "hearts": 0}
+    for item in series:
+        for metric in METRICS:
+            totals[metric] += int(item["totals"].get(metric) or 0)
+
+    last_collect = get_config(conn, "last_collect_at")
+    return {
+        "ok": True,
+        "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+        "resolution": resolution,
+        "stepSeconds": step,
+        "rangeStart": start_ts,
+        "rangeEnd": now_ts,
+        "plugins": plugin_catalog,
+        "series": series,
+        "totals": totals,
+        "hasEstimatedHistory": any_seed or get_config(conn, "seed_notice") == "1",
+        "lastCollectAt": int(last_collect) if last_collect else None,
+        "dbBytes": db_size_bytes(),
+        "dbPath": str(db_path()),
+        "generatedAt": now_ts,
+    }
+
+
+def set_author(author: str) -> dict[str, Any]:
+    author_key = author.strip()
+    if not author_key or len(author_key) > 120:
+        raise PulseError("validation-failed", "author must be 1–120 characters")
+    conn = connect()
+    try:
+        set_config(conn, "author", author_key)
+        conn.commit()
+        return {"ok": True, "author": author_key}
+    finally:
+        conn.close()
+
+
+def toggle_plugin(plugin_id: str, enabled: bool) -> dict[str, Any]:
+    conn = connect()
+    try:
+        row = conn.execute("SELECT id FROM plugins WHERE id = ?", (plugin_id,)).fetchone()
+        if row is None:
+            raise PulseError("not-found", f"unknown plugin id: {plugin_id}")
+        conn.execute(
+            "UPDATE plugins SET enabled = ? WHERE id = ?",
+            (1 if enabled else 0, plugin_id),
+        )
+        conn.commit()
+        return {"ok": True, "id": plugin_id, "enabled": enabled}
+    finally:
+        conn.close()
+
+
+def archive_db() -> dict[str, Any]:
+    conn = connect()
+    try:
+        conn.commit()
+        conn.execute("VACUUM")
+        src = db_path()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dest = archive_dir() / f"pulse-{stamp}.sqlite"
+        # Copy via SQL backup for consistency.
+        dest_conn = sqlite3.connect(str(dest))
+        try:
+            conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+        # After archive, prune aggressively to free space but keep recent observes.
+        now_ts = int(time.time())
+        conn.execute("DELETE FROM samples WHERE source = 'seed'")
+        prune(conn, now_ts)
+        conn.commit()
+        conn.execute("VACUUM")
+        set_config(conn, "seed_notice", "0")
+        conn.commit()
+        return {
+            "ok": True,
+            "archivePath": str(dest),
+            "dbBytes": db_size_bytes(),
+            "hasEstimatedHistory": has_seed_data(conn),
+        }
+    finally:
+        conn.close()
+
+
+def clear_history() -> dict[str, Any]:
+    conn = connect()
+    try:
+        conn.execute("DELETE FROM samples")
+        set_config(conn, "seed_notice", "0")
+        set_config(conn, "last_collect_at", "")
+        conn.commit()
+        conn.execute("VACUUM")
+        return {
+            "ok": True,
+            "dbBytes": db_size_bytes(),
+            "hasEstimatedHistory": False,
+            "cleared": True,
+        }
+    finally:
+        conn.close()
+
+
+def status() -> dict[str, Any]:
+    conn = connect()
+    try:
+        plugin_count = conn.execute("SELECT COUNT(*) AS n FROM plugins").fetchone()["n"]
+        sample_count = conn.execute("SELECT COUNT(*) AS n FROM samples").fetchone()["n"]
+        last_collect = get_config(conn, "last_collect_at") or None
+        return {
+            "ok": True,
+            "author": get_config(conn, "author") or DEFAULT_AUTHOR,
+            "pluginCount": int(plugin_count),
+            "sampleCount": int(sample_count),
+            "lastCollectAt": int(last_collect) if last_collect else None,
+            "dbBytes": db_size_bytes(),
+            "dbPath": str(db_path()),
+            "hasEstimatedHistory": has_seed_data(conn),
+            "maxDbBytes": MAX_DB_BYTES,
+        }
+    finally:
+        conn.close()
+
+
+def emit(payload: dict[str, Any], exit_code: int = 0) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=True))
+    sys.stdout.write("\n")
+    raise SystemExit(exit_code)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Omarchy Plugin Pulse helper")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_collect = sub.add_parser("collect", help="Fetch catalog + stats and store samples")
+    p_collect.add_argument("--author", default=None)
+
+    p_snap = sub.add_parser("snapshot", help="Emit UI snapshot JSON")
+    p_snap.add_argument(
+        "--resolution",
+        choices=list(RESOLUTION_STEPS),
+        default="daily",
+    )
+
+    p_author = sub.add_parser("set-author", help="Set marketplace author filter")
+    p_author.add_argument("author")
+
+    p_toggle = sub.add_parser("toggle-plugin", help="Enable or disable a plugin series")
+    p_toggle.add_argument("plugin_id")
+    p_toggle.add_argument("state", choices=["on", "off"])
+
+    sub.add_parser("archive", help="Archive DB copy and drop seed history")
+    sub.add_parser("clear", help="Clear all history samples")
+    sub.add_parser("status", help="Show store status")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "collect":
+            emit(collect(args.author))
+        elif args.command == "snapshot":
+            conn = connect()
+            try:
+                emit(query_series(conn, resolution=args.resolution))
+            finally:
+                conn.close()
+        elif args.command == "set-author":
+            emit(set_author(args.author))
+        elif args.command == "toggle-plugin":
+            emit(toggle_plugin(args.plugin_id, args.state == "on"))
+        elif args.command == "archive":
+            emit(archive_db())
+        elif args.command == "clear":
+            emit(clear_history())
+        elif args.command == "status":
+            emit(status())
+        else:
+            emit({"ok": False, "error": "unknown-command"}, 2)
+    except PulseError as exc:
+        emit({"ok": False, "error": exc.code, "message": exc.message}, 1)
+    except Exception as exc:  # noqa: BLE001 — surface unexpected failures to QML
+        emit({"ok": False, "error": "internal", "message": str(exc)}, 1)
+
+
+if __name__ == "__main__":
+    main()

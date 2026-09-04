@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.mtolhuys.plugin-pulse",
+  "name": "Omarchy Plugin Pulse",
+  "version": "0.1.0",
+  "author": "Maarten Tolhuijs",
+  "description": "Local-first bar graphs of marketplace growth for plugins by a configurable author.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "src/Service.qml",
+    "barWidget": "src/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Plugin Pulse",
+    "description": "Watch marketplace views, copies, and hearts over time",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

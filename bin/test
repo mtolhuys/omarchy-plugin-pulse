@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Offline checks for the Plugin Pulse helper."""
+
+from __future__ import annotations
+
+import json
+import os
+import runpy
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(os.environ.get("PULSE_ROOT") or Path(__file__).resolve().parents[1])
+HELPER = ROOT / "bin" / "pulse"
+
+
+def load_helper():
+    # Load without executing main.
+    ns = runpy.run_path(str(HELPER), run_name="pulse_helper")
+    return ns
+
+
+def main() -> int:
+    failures = 0
+    ns = load_helper()
+
+    # smoothseed monotonic
+    points = ns["seed_series"](1_700_000_000, 1_700_000_000 + 10 * 86400, 100)
+    values = [v for _, v in points]
+    if values[0] != 0 or values[-1] != 100:
+        print("FAIL seed endpoints", values[0], values[-1])
+        failures += 1
+    if any(values[i] > values[i + 1] for i in range(len(values) - 1)):
+        print("FAIL seed not monotonic", values)
+        failures += 1
+
+    plugin = {
+        "id": "io.github.mtolhuys.disk-lens",
+        "author": "Maarten Tolhuijs",
+        "repo": "https://github.com/mtolhuys/omarchy-disk-lens",
+        "name": "Omarchy Disk Lens",
+    }
+    if not ns["matches_author"](plugin, "mtolhuys"):
+        print("FAIL author match mtolhuys")
+        failures += 1
+    if ns["matches_author"](plugin, "no-such-author"):
+        print("FAIL author false positive")
+        failures += 1
+
+    # allowlist rejects non-https / unknown host
+    if ns["_allowed_url"]("http://api.omarchyplugins.com/v1/stats"):
+        print("FAIL http allowed")
+        failures += 1
+    if ns["_allowed_url"]("https://evil.example/v1/stats"):
+        print("FAIL evil origin allowed")
+        failures += 1
+    if not ns["_allowed_url"]("https://api.omarchyplugins.com/v1/stats"):
+        print("FAIL stats origin blocked")
+        failures += 1
+
+    # offline collect against fixture files
+    catalog = {
+        "generatedAt": "2026-09-04T00:00:00Z",
+        "plugins": [
+            {
+                "id": "io.github.mtolhuys.demo",
+                "name": "Demo",
+                "author": "Maarten Tolhuijs",
+                "repo": "https://github.com/mtolhuys/demo",
+                "listedAt": "2026-08-01T00:00:00Z",
+            }
+        ],
+    }
+    stats = {
+        "schemaVersion": 1,
+        "plugins": {
+            "io.github.mtolhuys.demo": {"views": 50, "copies": 5, "hearts": 1}
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp) / "state"
+        state.mkdir()
+        os.environ["XDG_STATE_HOME"] = str(state)
+        cat_path = Path(tmp) / "catalog.json"
+        stats_path = Path(tmp) / "stats.json"
+        cat_path.write_text(json.dumps(catalog))
+        stats_path.write_text(json.dumps(stats))
+        os.environ["PULSE_CATALOG_FILE"] = str(cat_path)
+        os.environ["PULSE_STATS_FILE"] = str(stats_path)
+
+        # reload helper bindings that close over env at call time — functions read env live
+        result = ns["collect"]("mtolhuys")
+        if not result.get("ok") or result.get("matched") != 1:
+            print("FAIL collect", result)
+            failures += 1
+        snap = ns["query_series"](ns["connect"](), resolution="daily")
+        if not snap.get("ok") or len(snap.get("series") or []) != 1:
+            print("FAIL snapshot", snap)
+            failures += 1
+        if not snap.get("hasEstimatedHistory"):
+            print("FAIL expected estimated history")
+            failures += 1
+        if snap["series"][0]["totals"]["views"] != 50:
+            print("FAIL totals", snap["series"][0]["totals"])
+            failures += 1
+
+    # manifest sanity
+    manifest = json.loads((ROOT / "manifest.json").read_text())
+    for key in ("id", "entryPoints", "kinds", "keepLoaded", "barWidget"):
+        if key not in manifest:
+            print("FAIL manifest missing", key)
+            failures += 1
+    for ep in ("service", "barWidget"):
+        rel = manifest["entryPoints"][ep]
+        if not (ROOT / rel).is_file():
+            print("FAIL missing entry point", rel)
+            failures += 1
+    if not (ROOT / "bin" / "pulse").is_file():
+        print("FAIL missing helper")
+        failures += 1
+
+    if failures:
+        print(f"{failures} failure(s)")
+        return 1
+    print("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
