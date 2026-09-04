@@ -154,3 +154,96 @@ function diagnosticText(raw, fallback) {
   var first = text.split("\n")[0]
   return first.length > 240 ? first.slice(0, 237) + "…" : first
 }
+
+function nearestTimestamp(series, targetTs) {
+  var target = Number(targetTs || 0)
+  var best = 0
+  var bestDist = Number.POSITIVE_INFINITY
+  var list = series || []
+  for (var i = 0; i < list.length; i++) {
+    var points = list[i] && list[i].points ? list[i].points : []
+    for (var j = 0; j < points.length; j++) {
+      var p = points[j]
+      if (!p) continue
+      var t = Number(p.t)
+      if (!isFinite(t)) continue
+      var dist = Math.abs(t - target)
+      if (dist < bestDist || (dist === bestDist && t > best)) {
+        bestDist = dist
+        best = t
+      }
+    }
+  }
+  return best
+}
+
+function sliceAtTime(series, targetTs) {
+  var target = Number(targetTs || 0)
+  var out = []
+  var list = series || []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!item) continue
+    var points = item.points || []
+    var value = 0
+    var found = false
+    var bestT = Number.NEGATIVE_INFINITY
+    var nearestT = 0
+    var nearestDist = Number.POSITIVE_INFINITY
+    var nearestV = 0
+    for (var j = 0; j < points.length; j++) {
+      var p = points[j]
+      if (!p) continue
+      var t = Number(p.t)
+      var v = Number(p.v)
+      if (!isFinite(t) || !isFinite(v)) continue
+      if (t <= target && t >= bestT) {
+        bestT = t
+        value = v
+        found = true
+      }
+      var dist = Math.abs(t - target)
+      if (dist < nearestDist) {
+        nearestDist = dist
+        nearestT = t
+        nearestV = v
+      }
+    }
+    if (!found && nearestDist !== Number.POSITIVE_INFINITY) {
+      value = nearestV
+      found = true
+    }
+    out.push({
+      id: item.id,
+      name: item.name,
+      colorKey: item.colorKey,
+      value: found ? value : 0
+    })
+  }
+  return out
+}
+
+function formatAxisTick(epochSeconds, resolution) {
+  var t = Number(epochSeconds || 0)
+  if (!t) return ""
+  var d = new Date(t * 1000)
+  var res = String(resolution || "daily")
+  if (res === "hourly")
+    return Qt.formatDateTime(d, "HH:mm")
+  if (res === "monthly")
+    return Qt.formatDateTime(d, "MMM yyyy")
+  return Qt.formatDateTime(d, "MMM d")
+}
+
+function formatSliceWhen(epochSeconds, resolution) {
+  var t = Number(epochSeconds || 0)
+  if (!t) return ""
+  var d = new Date(t * 1000)
+  var res = String(resolution || "daily")
+  if (res === "hourly")
+    return Qt.formatDateTime(d, "MMM d · HH:mm")
+  if (res === "monthly")
+    return Qt.formatDateTime(d, "MMM yyyy")
+  return Qt.formatDateTime(d, "MMM d · yyyy")
+}
+

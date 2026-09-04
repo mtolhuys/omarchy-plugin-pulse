@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v011"
+  readonly property string buildIdentity: "plugin-pulse-widget-v012"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -39,6 +39,9 @@ BarWidget {
   property bool confirmClear: false
   property string confirmDeleteAuthor: ""
   property string authorAddDraft: ""
+  property real selectedTs: 0
+
+  readonly property var timeSlice: Model.sliceAtTime(chartSeries, selectedTs || 0)
 
   readonly property bool opened: popupOpen
   readonly property bool popoutSwitchClosing: false
@@ -46,6 +49,7 @@ BarWidget {
 
   function open() {
     popupOpen = true
+    selectedTs = 0
     authorEdit = authorValue || ""
     if (pulseService) {
       if (!snapshot.ok) pulseService.refreshSnapshot()
@@ -64,15 +68,22 @@ BarWidget {
   function toggle() { popupOpen ? close() : open() }
 
   function setResolution(value) {
+    selectedTs = 0
     if (pulseService) pulseService.setResolution(value)
   }
 
   function setMetric(value) {
+    selectedTs = 0
     metric = value
   }
 
   function refresh() {
+    selectedTs = 0
     if (pulseService) pulseService.collectNow()
+  }
+
+  function clearTimeSelection() {
+    selectedTs = 0
   }
 
   function saveAuthor() {
@@ -450,21 +461,75 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          height: root.settingsOpen ? Style.space(120) : Style.space(168)
+          height: root.settingsOpen
+            ? Style.space(120)
+            : (root.selectedTs > 0 ? Style.space(260) : Style.space(168))
           color: Util.alpha(Color.popups.text, 0.035)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
           clip: true
 
-          LineChart {
+          Column {
             anchors.fill: parent
-            anchors.margins: Style.space(10)
-            series: root.chartSeries
-            metric: root.metric
-            accentColor: Color.accent
-            foregroundColor: Color.popups.text
-            mutedColor: Color.muted
-            urgentColor: Color.urgent
+            anchors.margins: root.selectedTs > 0 && !root.settingsOpen
+              ? Style.space(8) : Style.space(10)
+            spacing: Style.space(4)
+
+            LineChart {
+              id: lineChart
+              width: parent.width
+              height: root.settingsOpen
+                ? Style.space(100)
+                : (root.selectedTs > 0 ? Style.space(120) : Style.space(148))
+              series: root.chartSeries
+              metric: root.metric
+              resolution: root.resolutionValue
+              selectedTs: root.selectedTs
+              accentColor: Color.accent
+              foregroundColor: Color.popups.text
+              mutedColor: Color.muted
+              urgentColor: Color.urgent
+              onSelectionChanged: function(ts) { root.selectedTs = ts }
+            }
+
+            Row {
+              width: parent.width
+              visible: root.selectedTs > 0 && !root.settingsOpen
+              height: visible ? Style.space(16) : 0
+              spacing: Style.space(6)
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - clearSliceButton.width - Style.space(6)
+                text: Model.formatSliceWhen(root.selectedTs, root.resolutionValue)
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+              }
+
+              Button {
+                id: clearSliceButton
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Clear"
+                focusable: true
+                tooltipText: "Clear time selection"
+                onClicked: root.clearTimeSelection()
+              }
+            }
+
+            SliceChart {
+              width: parent.width
+              height: visible ? Style.space(100) : 0
+              visible: root.selectedTs > 0 && !root.settingsOpen
+              slices: root.timeSlice
+              title: Model.formatSliceWhen(root.selectedTs, root.resolutionValue)
+              accentColor: Color.accent
+              foregroundColor: Color.popups.text
+              mutedColor: Color.muted
+            }
           }
         }
 
