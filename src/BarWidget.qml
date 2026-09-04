@@ -127,14 +127,14 @@ BarWidget {
     if (!authorField.activeFocus) authorEdit = authorValue || authorEdit
   }
 
-  // Plain text — always readable in the bar (no Canvas / custom glyph).
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "Pulse"
-    labelVisible: true
+    text: ""
+    labelVisible: false
     hasVisualContent: true
+    fixedWidth: root.barSize
     tooltipText: "Plugin Pulse — " + root.statusLabel() + " · left open · middle refresh"
     active: root.estimated || root.collecting
     activeColor: Color.accent
@@ -144,6 +144,15 @@ BarWidget {
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.refresh()
       else root.toggle()
+    }
+
+    PulseIcon {
+      width: Math.min(parent.width, parent.height) * 0.55
+      height: width
+      anchors.centerIn: parent
+      foreground: button.foreground
+      accent: button.activeColor
+      active: button.active || root.collecting
     }
   }
 
