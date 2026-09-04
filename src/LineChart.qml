@@ -22,6 +22,9 @@ Item {
   })
 
   function colorFor(key) {
+    var k = String(key || "")
+    if (k.indexOf("#") === 0)
+      return k
     return colorMap[key] || accentColor
   }
 
@@ -78,7 +81,7 @@ Item {
       function yAt(v) { return padT + (1 - ((v - b.minV) / spanV)) * h }
 
       // grid
-      ctx.strokeStyle = root.gridColor
+      ctx.strokeStyle = String(root.gridColor)
       ctx.lineWidth = 1
       ctx.beginPath()
       for (var g = 1; g <= 3; g++) {
@@ -89,7 +92,7 @@ Item {
       ctx.stroke()
 
       if (!root.series || root.series.length === 0) {
-        ctx.fillStyle = root.mutedColor
+        ctx.fillStyle = String(root.mutedColor)
         ctx.font = "12px sans-serif"
         ctx.textAlign = "center"
         ctx.fillText("No samples yet", width / 2, height / 2)
@@ -100,18 +103,22 @@ Item {
         var item = root.series[i]
         var points = item && item.points ? item.points : []
         if (points.length === 0) continue
-        var stroke = root.colorFor(item.colorKey)
+        var stroke = String(root.colorFor(item.colorKey))
         ctx.strokeStyle = stroke
-        ctx.lineWidth = 2
+        ctx.lineWidth = 2.5
         ctx.lineJoin = "round"
         ctx.lineCap = "round"
         ctx.beginPath()
         var started = false
+        var lastX = 0
+        var lastY = 0
         for (var j = 0; j < points.length; j++) {
           var p = points[j]
           if (!p) continue
           var x = xAt(Number(p.t))
           var y = yAt(Number(p.v))
+          lastX = x
+          lastY = y
           if (!started) {
             ctx.moveTo(x, y)
             started = true
@@ -120,6 +127,14 @@ Item {
           }
         }
         ctx.stroke()
+
+        // Always mark the latest point so short series stay visible.
+        if (started) {
+          ctx.fillStyle = stroke
+          ctx.beginPath()
+          ctx.arc(lastX, lastY, 3, 0, Math.PI * 2)
+          ctx.fill()
+        }
 
         if (root.showDots) {
           ctx.fillStyle = stroke

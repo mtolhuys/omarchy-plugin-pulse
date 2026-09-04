@@ -73,6 +73,9 @@ BarWidget {
   }
 
   function colorForKey(key) {
+    var k = String(key || "")
+    if (k.indexOf("#") === 0)
+      return k
     if (key === "urgent") return Color.urgent
     if (key === "muted") return Color.muted
     if (key === "foreground") return Color.popups.text
@@ -427,24 +430,27 @@ BarWidget {
             Repeater {
               model: root.snapshot.plugins || []
 
-              delegate: Button {
+              delegate: Row {
                 required property var modelData
                 required property int index
-                text: Model.shortPluginName(modelData.name, modelData.id)
-                selected: modelData.enabled === true
-                focusable: true
-                tooltipText: modelData.enabled ? "Hide from chart" : "Show on chart"
-                onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
+                spacing: Style.space(6)
 
                 Rectangle {
-                  anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: Style.space(6)
-                  width: Style.space(8)
-                  height: width
+                  width: 9
+                  height: 9
                   radius: width / 2
                   color: root.colorForKey(Model.seriesPalette(index))
                   opacity: modelData.enabled === true ? 1 : 0.35
+                }
+
+                Button {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Model.shortPluginName(modelData.name, modelData.id)
+                  selected: modelData.enabled === true
+                  focusable: true
+                  tooltipText: modelData.enabled ? "Hide from chart" : "Show on chart"
+                  onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
                 }
               }
             }
@@ -540,11 +546,20 @@ BarWidget {
 
                 delegate: Row {
                   required property var modelData
+                  required property int index
                   width: totalsColumn.width
                   spacing: Style.space(8)
 
+                  Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 8
+                    height: 8
+                    radius: width / 2
+                    color: root.colorForKey(Model.seriesPalette(index))
+                  }
+
                   Text {
-                    width: parent.width * 0.42
+                    width: parent.width * 0.42 - Style.space(8) - 8
                     text: Model.safeLabel(Model.shortPluginName(modelData.name, modelData.id))
                     color: Color.popups.text
                     font.family: Style.font.family

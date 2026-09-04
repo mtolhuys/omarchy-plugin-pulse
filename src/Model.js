@@ -107,7 +107,8 @@ function safeLabel(value) {
 }
 
 function seriesPalette(index) {
-  var palette = ["accent", "foreground", "muted", "urgent"]
+  // Fixed distinct hex palette (dark-UI friendly); independent of theme greys.
+  var palette = ["#5B8CFF", "#3DDC97", "#FFB020", "#FF6B6B", "#C084FC", "#22D3EE"]
   return palette[index % palette.length]
 }
 
