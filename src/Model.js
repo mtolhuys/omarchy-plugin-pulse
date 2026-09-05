@@ -10,6 +10,21 @@ function parseJson(raw, fallback) {
   }
 }
 
+
+function marketplacePluginUrl(pluginId) {
+  var id = String(pluginId || "").trim()
+  if (!id) return ""
+  return "https://plugins.omarchy.org/plugin.html?id=" + encodeURIComponent(id)
+}
+
+function marketplaceAuthorUrl(author) {
+  var a = String(author || "").trim()
+  if (a.indexOf("@") === 0)
+    a = a.slice(1).trim()
+  if (!a) return ""
+  return "https://plugins.omarchy.org/?author=" + encodeURIComponent(a)
+}
+
 function emptySnapshot() {
   return {
     ok: false,

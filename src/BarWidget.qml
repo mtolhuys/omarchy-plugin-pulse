@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v017"
+  readonly property string buildIdentity: "plugin-pulse-widget-v018"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -239,6 +239,22 @@ BarWidget {
   function setCollectInterval(minutes) {
     if (pulseService)
       pulseService.setCollectInterval(minutes)
+  }
+
+  function openHttpsUrl(url) {
+    var u = String(url || "").trim()
+    if (!u || u.indexOf("https://plugins.omarchy.org/") !== 0)
+      return
+    if (!Qt.openUrlExternally(u))
+      Quickshell.execDetached(["xdg-open", u])
+  }
+
+  function openPluginMarketplace(pluginId) {
+    openHttpsUrl(Model.marketplacePluginUrl(pluginId))
+  }
+
+  function openAuthorMarketplace(author) {
+    openHttpsUrl(Model.marketplaceAuthorUrl(author))
   }
 
   function colorForKey(key) {
@@ -708,7 +724,7 @@ BarWidget {
                       anchors.verticalCenter: parent.verticalCenter
                       width: Math.max(
                         Style.space(80),
-                        parent.width - trashAuthorButton.width - Style.space(4)
+                        parent.width - marketAuthorButton.width - trashAuthorButton.width - Style.space(8)
                       )
                       text: (root.authorIsEnabled(modelData) ? "✓  " : "") + Model.safeLabel(modelData.key)
                       leftAlign: true
@@ -716,8 +732,19 @@ BarWidget {
                       bordered: root.authorIsEnabled(modelData)
                       focusable: true
                       tooltipText: modelData.pluginCount + " plugins · "
-                        + modelData.sampleCount + " samples"
+                        + modelData.sampleCount + " samples · right-click marketplace"
                       onClicked: root.toggleAuthorRow(modelData.key, root.authorIsEnabled(modelData))
+                      onRightClicked: root.openAuthorMarketplace(modelData.key)
+                    }
+
+                    Button {
+                      id: marketAuthorButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      iconText: "↗"
+                      focusable: true
+                      tooltipText: "Open " + modelData.key + " on the marketplace"
+                      Accessible.name: "Marketplace " + modelData.key
+                      onClicked: root.openAuthorMarketplace(modelData.key)
                     }
 
                     Button {
@@ -854,36 +881,59 @@ BarWidget {
                     width: pluginsList.width
                     spacing: Style.space(4)
 
-                    Column {
+                    Item {
                       anchors.verticalCenter: parent.verticalCenter
                       width: Math.max(
                         Style.space(80),
-                        parent.width - trashPluginButton.width - Style.space(4)
+                        parent.width - marketPluginButton.width - trashPluginButton.width - Style.space(8)
                       )
-                      spacing: Style.space(1)
+                      height: pluginLabels.implicitHeight
 
-                      Text {
+                      Column {
+                        id: pluginLabels
                         width: parent.width
-                        text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
-                        color: Color.popups.text
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideRight
-                        textFormat: Text.PlainText
+                        spacing: Style.space(1)
+
+                        Text {
+                          width: parent.width
+                          text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                          color: Color.popups.text
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.bodySmall
+                          elide: Text.ElideRight
+                          textFormat: Text.PlainText
+                        }
+
+                        Text {
+                          width: parent.width
+                          text: Model.safeLabel(
+                            (modelData.author ? modelData.author + " · " : "")
+                            + String(modelData.id || "")
+                          )
+                          color: Color.muted
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideMiddle
+                          textFormat: Text.PlainText
+                        }
                       }
 
-                      Text {
-                        width: parent.width
-                        text: Model.safeLabel(
-                          (modelData.author ? modelData.author + " · " : "")
-                          + String(modelData.id || "")
-                        )
-                        color: Color.muted
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideMiddle
-                        textFormat: Text.PlainText
+                      MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.openPluginMarketplace(modelData.id)
                       }
+                    }
+
+                    Button {
+                      id: marketPluginButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      iconText: "↗"
+                      focusable: true
+                      tooltipText: "Open marketplace page"
+                      Accessible.name: "Marketplace " + String(modelData.id || "")
+                      onClicked: root.openPluginMarketplace(modelData.id)
                     }
 
                     Button {
@@ -1366,10 +1416,17 @@ BarWidget {
                 MouseArea {
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.togglePlugin(modelData.id, !chip.on)
+                  acceptedButtons: Qt.LeftButton | Qt.RightButton
+                  onClicked: function(mouse) {
+                    if (mouse.button === Qt.RightButton)
+                      root.openPluginMarketplace(modelData.id)
+                    else
+                      root.togglePlugin(modelData.id, !chip.on)
+                  }
                 }
                 Accessible.role: Accessible.CheckBox
                 Accessible.name: Model.shortPluginName(modelData.name, modelData.id)
+                  + " · right-click marketplace"
                 Accessible.checkable: true
                 Accessible.checked: chip.on
                 Accessible.onPressAction: root.togglePlugin(modelData.id, !chip.on)
