@@ -78,7 +78,7 @@ MIT — see [LICENSE](LICENSE).
 Optional Hyprland shortcut (add to `~/.config/hypr/bindings.lua`):
 
 ```lua
-o.bind("SUPER + ALT + P", "Omarchy Plugin Pulse", "omarchy-shell shell summon io.github.mtolhuys.plugin-pulse")
+o.bind("SUPER + ALT + P", "Omarchy Plugin Pulse", "omarchy-shell shell toggle io.github.mtolhuys.plugin-pulse")
 ```
 
-Then `hyprctl reload`. Summon opens or raises the Pulse popout (it does not toggle closed).
+Then `hyprctl reload`. Toggle opens the Pulse popout if closed, and hides it if open.
