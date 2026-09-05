@@ -712,14 +712,31 @@ BarWidget {
               interactive: contentHeight > height + 1
               flickableDirection: Flickable.VerticalFlick
               QQC.ScrollBar.vertical: QQC.ScrollBar {
+                id: totalsScrollBar
                 policy: totalsSeriesFlick.contentHeight > totalsSeriesFlick.height
-                  ? QQC.ScrollBar.AsNeeded
+                  ? QQC.ScrollBar.AlwaysOn
                   : QQC.ScrollBar.AlwaysOff
+                implicitWidth: 2
+                width: 2
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                minimumSize: 0.12
+                contentItem: Rectangle {
+                  implicitWidth: 2
+                  width: 2
+                  radius: 1
+                  color: Util.alpha(
+                    Color.popups.text,
+                    totalsScrollBar.hovered || totalsScrollBar.pressed ? 0.5 : 0.28
+                  )
+                }
+                background: Item { implicitWidth: 2 }
               }
 
               Column {
                 id: totalsSeriesColumn
-                width: totalsSeriesFlick.width
+                width: Math.max(1, totalsSeriesFlick.width - totalsColumn.scrollGutter)
                 spacing: Style.space(3)
 
                 Repeater {
