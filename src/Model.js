@@ -155,6 +155,59 @@ function diagnosticText(raw, fallback) {
   return first.length > 240 ? first.slice(0, 237) + "…" : first
 }
 
+function sortedTimestamps(series) {
+  var seen = {}
+  var out = []
+  var list = series || []
+  for (var i = 0; i < list.length; i++) {
+    var points = list[i] && list[i].points ? list[i].points : []
+    for (var j = 0; j < points.length; j++) {
+      var p = points[j]
+      if (!p) continue
+      var t = Number(p.t)
+      if (!isFinite(t)) continue
+      var key = String(t)
+      if (seen[key]) continue
+      seen[key] = true
+      out.push(t)
+    }
+  }
+  out.sort(function(a, b) { return a - b })
+  return out
+}
+
+function stepTimestamp(series, currentTs, delta) {
+  var stamps = sortedTimestamps(series)
+  if (!stamps.length) return 0
+  var step = Number(delta || 0)
+  if (!isFinite(step) || step === 0) return Number(currentTs || 0) || 0
+  var cur = Number(currentTs || 0)
+  if (!(cur > 0))
+    return step < 0 ? stamps[stamps.length - 1] : stamps[0]
+  var idx = -1
+  for (var i = 0; i < stamps.length; i++) {
+    if (stamps[i] === cur) {
+      idx = i
+      break
+    }
+  }
+  if (idx < 0) {
+    var nearest = nearestTimestamp(series, cur)
+    for (var j = 0; j < stamps.length; j++) {
+      if (stamps[j] === nearest) {
+        idx = j
+        break
+      }
+    }
+  }
+  if (idx < 0)
+    return step < 0 ? stamps[0] : stamps[stamps.length - 1]
+  var next = idx + (step < 0 ? -1 : 1)
+  if (next < 0) next = 0
+  if (next >= stamps.length) next = stamps.length - 1
+  return stamps[next]
+}
+
 function nearestTimestamp(series, targetTs) {
   var target = Number(targetTs || 0)
   var best = 0

@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v012"
+  readonly property string buildIdentity: "plugin-pulse-widget-v013"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -214,7 +214,7 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    focusTarget: root.settingsOpen ? authorAddField : panelScroll
+    focusTarget: root.settingsOpen ? authorAddField : lineChart
     contentWidth: popup.fittedContentWidth(Style.space(520))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight)
 
@@ -241,60 +241,87 @@ BarWidget {
         }
       }
 
+      Shortcut {
+        sequence: "Left"
+        enabled: root.popupOpen && !root.settingsOpen
+        context: Qt.WindowShortcut
+        onActivated: lineChart.stepBy(-1)
+      }
+
+      Shortcut {
+        sequence: "Right"
+        enabled: root.popupOpen && !root.settingsOpen
+        context: Qt.WindowShortcut
+        onActivated: lineChart.stepBy(1)
+      }
+
       Column {
         id: panelColumn
         width: panelScroll.width
         spacing: Style.space(5)
 
-        Row {
+        Item {
           width: parent.width
-          spacing: Style.space(10)
+          height: Math.max(headerIcon.height, refreshButton.height, headerTitles.height)
 
-          BorderSurface {
-            width: Style.space(28)
-            height: width
-            color: Style.selectedFillFor(Color.accent, Color.accent)
-            borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
-            radius: Style.cornerRadius
-
-            PulseIcon {
-              width: parent.width * 0.62
-              height: width
-              anchors.centerIn: parent
-              foreground: Color.accent
-              accent: Color.accent
-              active: true
-            }
-          }
-
-          Column {
-            width: parent.width - Style.space(28) - Style.space(10) - refreshButton.width
+          Row {
+            id: headerLeft
+            anchors.left: parent.left
+            anchors.right: refreshButton.left
+            anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(2)
+            spacing: Style.space(10)
 
-            Text {
-              width: parent.width
-              text: "Plugin Pulse"
-              color: Color.popups.text
-              font.family: Style.font.family
-              font.pixelSize: Style.font.title
-              font.bold: true
-              textFormat: Text.PlainText
+            BorderSurface {
+              id: headerIcon
+              width: Style.space(28)
+              height: width
+              color: Style.selectedFillFor(Color.accent, Color.accent)
+              borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+              radius: Style.cornerRadius
+
+              PulseIcon {
+                width: parent.width * 0.62
+                height: width
+                anchors.centerIn: parent
+                foreground: Color.accent
+                accent: Color.accent
+                active: true
+              }
             }
 
-            Text {
-              width: parent.width
-              text: root.statusLabel()
-              color: root.collecting ? Color.accent : Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-              textFormat: Text.PlainText
+            Column {
+              id: headerTitles
+              width: Math.max(0, headerLeft.width - Style.space(28) - Style.space(10))
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Text {
+                width: parent.width
+                text: "Plugin Pulse"
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+              }
+
+              Text {
+                width: parent.width
+                text: root.statusLabel()
+                color: root.collecting ? Color.accent : Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+              }
             }
           }
 
           Button {
             id: refreshButton
+            anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             iconText: "↻"
             tooltipText: "Refresh marketplace stats"
@@ -595,7 +622,10 @@ BarWidget {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             anchors.margins: Style.space(9)
-            spacing: Style.space(8)
+            spacing: Style.space(6)
+
+            readonly property real nameColW: width * 0.40
+            readonly property real metricColW: (width - nameColW) / 3
 
             Row {
               width: parent.width
@@ -624,41 +654,82 @@ BarWidget {
 
             Row {
               width: parent.width
-              spacing: Style.space(12)
 
-              Repeater {
-                model: [
-                  { key: "views", label: "Views", value: root.snapshot.totals.views },
-                  { key: "copies", label: "Copies", value: root.snapshot.totals.copies },
-                  { key: "hearts", label: "Hearts", value: root.snapshot.totals.hearts }
-                ]
+              Item { width: totalsColumn.nameColW; height: 1 }
 
-                delegate: Column {
-                  required property var modelData
-                  width: (parent.width - Style.space(24)) / 3
-                  spacing: Style.space(2)
+              Text {
+                width: totalsColumn.metricColW
+                text: "VIEWS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.7
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
 
-                  Text {
-                    width: parent.width
-                    text: modelData.label.toUpperCase()
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                    font.letterSpacing: 0.7
-                    textFormat: Text.PlainText
-                  }
+              Text {
+                width: totalsColumn.metricColW
+                text: "COPIES"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.7
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
 
-                  Text {
-                    width: parent.width
-                    text: Model.formatCount(modelData.value)
-                    color: root.metric === modelData.key ? Color.accent : Color.popups.text
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.title
-                    font.bold: true
-                    textFormat: Text.PlainText
-                  }
-                }
+              Text {
+                width: totalsColumn.metricColW
+                text: "HEARTS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.7
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
+            }
+
+            Row {
+              width: parent.width
+
+              Item { width: totalsColumn.nameColW; height: 1 }
+
+              Text {
+                width: totalsColumn.metricColW
+                text: Model.formatCount(root.snapshot.totals.views)
+                color: root.metric === "views" ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
+
+              Text {
+                width: totalsColumn.metricColW
+                text: Model.formatCount(root.snapshot.totals.copies)
+                color: root.metric === "copies" ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
+
+              Text {
+                width: totalsColumn.metricColW
+                text: Model.formatCount(root.snapshot.totals.hearts)
+                color: root.metric === "hearts" ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
               }
             }
 
@@ -673,40 +744,54 @@ BarWidget {
                   required property var modelData
                   required property int index
                   width: totalsColumn.width
-                  spacing: Style.space(8)
 
-                  Rectangle {
+                  Item {
+                    width: totalsColumn.nameColW
+                    height: Math.max(nameDot.height, nameLabel.height)
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 8
-                    height: 8
-                    radius: width / 2
-                    color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
+
+                    Row {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(8)
+
+                      Rectangle {
+                        id: nameDot
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 8
+                        height: 8
+                        radius: width / 2
+                        color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
+                      }
+
+                      Text {
+                        id: nameLabel
+                        width: Math.max(0, parent.width - nameDot.width - Style.space(8))
+                        text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                        color: Color.popups.text
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                        textFormat: Text.PlainText
+                      }
+                    }
                   }
 
                   Text {
-                    width: parent.width * 0.42 - Style.space(8) - 8
-                    text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                    width: totalsColumn.metricColW
+                    text: Model.formatCount(modelData.totals.views)
                     color: Color.popups.text
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText
-                  }
-
-                  Text {
-                    width: parent.width * 0.18
-                    text: Model.formatCount(modelData.totals.views)
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
                     horizontalAlignment: Text.AlignRight
                     textFormat: Text.PlainText
                   }
 
                   Text {
-                    width: parent.width * 0.18
+                    width: totalsColumn.metricColW
                     text: Model.formatCount(modelData.totals.copies)
-                    color: Color.muted
+                    color: Color.popups.text
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
                     horizontalAlignment: Text.AlignRight
@@ -714,9 +799,9 @@ BarWidget {
                   }
 
                   Text {
-                    width: parent.width * 0.18
+                    width: totalsColumn.metricColW
                     text: Model.formatCount(modelData.totals.hearts)
-                    color: Color.muted
+                    color: Color.popups.text
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
                     horizontalAlignment: Text.AlignRight
@@ -745,8 +830,8 @@ BarWidget {
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              width: parent.width - archiveButton.width - clearButton.width
-                - (root.confirmClear ? cancelClearButton.width + Style.space(12) : Style.space(12))
+              width: parent.width - clearButton.width
+                - (root.confirmClear ? cancelClearButton.width + Style.space(12) : Style.space(6))
               text: Model.formatBytes(root.snapshot.dbBytes) + " · "
                 + Model.safeLabel(root.authorValue)
               color: Color.muted
@@ -754,17 +839,6 @@ BarWidget {
               font.pixelSize: Style.font.caption
               elide: Text.ElideMiddle
               textFormat: Text.PlainText
-            }
-
-            Button {
-              id: archiveButton
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Archive"
-              focusable: true
-              tooltipText: "Copy DB to archive and drop estimated seed points"
-              enabled: !!root.pulseService && !root.busy
-              opacity: enabled ? 1 : 0.35
-              onClicked: if (root.pulseService) root.pulseService.archiveHistory()
             }
 
             Button {

@@ -5,6 +5,8 @@ import "Model.js" as Model
 
 Item {
   id: root
+  focus: true
+  activeFocusOnTab: true
 
   property var series: []
   property string metric: "views"
@@ -88,6 +90,23 @@ Item {
     if (selectedTs !== snap)
       selectionChanged(snap)
     canvas.requestPaint()
+  }
+
+  function stepBy(delta) {
+    var current = selectedTs > 0 ? selectedTs : effectiveSelectedTs()
+    var next = Model.stepTimestamp(series, current, delta)
+    if (next > 0)
+      selectionChanged(next)
+  }
+
+  Keys.onPressed: function(event) {
+    if (event.key === Qt.Key_Left) {
+      stepBy(-1)
+      event.accepted = true
+    } else if (event.key === Qt.Key_Right) {
+      stepBy(1)
+      event.accepted = true
+    }
   }
 
   function formatTick(t, minT, maxT) {
@@ -262,9 +281,11 @@ Item {
     preventStealing: true
 
     onClicked: function(mouse) {
+      root.forceActiveFocus()
       root.selectAtX(mouse.x)
     }
     onPressed: function(mouse) {
+      root.forceActiveFocus()
       root.selectAtX(mouse.x)
     }
     onPositionChanged: function(mouse) {
