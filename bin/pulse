@@ -302,12 +302,13 @@ def save_tracked_authors(conn: sqlite3.Connection, authors: list[str]) -> None:
 
 
 def add_tracked_author(conn: sqlite3.Connection, key: str) -> str:
+    """Ensure author is tracked and active without reordering existing entries."""
     author_key = key.strip()
     authors = tracked_authors_list(conn)
     low = author_key.lower()
-    authors = [a for a in authors if a.lower() != low]
-    authors.append(author_key)
-    save_tracked_authors(conn, authors)
+    if not any(a.lower() == low for a in authors):
+        authors.append(author_key)
+        save_tracked_authors(conn, authors)
     set_config(conn, "author", author_key)
     return author_key
 
