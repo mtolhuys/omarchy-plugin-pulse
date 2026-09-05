@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v017"
+  readonly property string buildIdentity: "plugin-pulse-service-v019"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -184,8 +184,13 @@ Item {
     var mins = Number(settings.collectIntervalMin || 60)
     if ([5, 15, 30, 60].indexOf(mins) < 0)
       mins = 60
-    if (collectIntervalMin !== mins)
+    var intervalChanged = collectIntervalMin !== mins
+    if (intervalChanged)
       collectIntervalMin = mins
+    // Always arm on first settings; re-arm when interval changes.
+    // armCollectTimer reads collectIntervalMin (already assigned above).
+    if (!collectTimerArmed || intervalChanged)
+      armCollectTimer()
   }
 
   function setNotifications(enabled) {
@@ -276,7 +281,12 @@ Item {
       dbBytes: snapshot.dbBytes,
       lastCollectAt: snapshot.lastCollectAt,
       notificationsEnabled: notificationsEnabled,
-      collectIntervalMin: collectIntervalMin
+      collectIntervalMin: collectIntervalMin,
+      collectTimerArmed: collectTimerArmed,
+      collectTimerRunning: collectTimer.running,
+      collectTimerIntervalMs: collectTimerIntervalMs,
+      collectTimerArmedAt: collectTimerArmedAt,
+      collectTimerFireCount: collectTimerFireCount
     }
   }
 
@@ -456,18 +466,39 @@ Item {
     }
   }
 
-  Timer {
-    id: collectTimer
-    interval: root.collectIntervalMs
-    repeat: true
-    running: true
-    onTriggered: root.collectNow()
+  property bool collectTimerArmed: false
+  property double collectTimerArmedAt: 0
+  property int collectTimerIntervalMs: 0
+  property int collectTimerFireCount: 0
+
+  function armCollectTimer() {
+    // Compute ms from collectIntervalMin directly — do NOT read collectIntervalMs
+    // inside onCollectIntervalMinChanged; that binding can still be stale.
+    var mins = Number(root.collectIntervalMin || 60)
+    if ([5, 15, 30, 60].indexOf(mins) < 0)
+      mins = 60
+    var ms = mins * 60 * 1000
+    collectTimer.stop()
+    collectTimer.interval = ms
+    collectTimerIntervalMs = ms
+    collectTimerArmedAt = Date.now()
+    collectTimerArmed = true
+    collectTimer.start()
+    console.log("plugin-pulse: armed collect timer", ms, "ms (", mins, "min)")
   }
 
-  onCollectIntervalMinChanged: {
-    collectTimer.stop()
-    collectTimer.interval = root.collectIntervalMs
-    collectTimer.start()
+  Timer {
+    id: collectTimer
+    // Interval always set explicitly via armCollectTimer — do not bind
+    // `running: true` or a changing interval binding (both have been flaky).
+    interval: 60 * 60 * 1000
+    repeat: true
+    running: false
+    onTriggered: {
+      root.collectTimerFireCount += 1
+      console.log("plugin-pulse: collect timer fired", root.collectTimerFireCount)
+      root.collectNow()
+    }
   }
 
   Timer {
@@ -478,6 +509,8 @@ Item {
     onTriggered: {
       root.refreshSnapshot()
       root.collectNow()
+      // Periodic timer is armed from applySettings once snapshot/collect
+      // settings are known (avoids a stale 60‑min arm on boot).
     }
   }
 
