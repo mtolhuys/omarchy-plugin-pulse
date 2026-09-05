@@ -430,7 +430,7 @@ BarWidget {
 
             Text {
               width: parent.width
-              text: "Select to switch · Remove purges that author’s stored plugins"
+              text: "Tap a row to switch · trash purges stored plugins"
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -438,37 +438,87 @@ BarWidget {
               textFormat: Text.PlainText
             }
 
-            Flow {
+            Flickable {
+              id: authorsFlick
               width: parent.width
-              spacing: Style.space(5)
+              height: Math.min(
+                Style.space(132),
+                Math.max(Style.space(36), authorsList.implicitHeight)
+              )
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              contentWidth: width
+              contentHeight: authorsList.implicitHeight
+              interactive: contentHeight > height + 1
+              flickableDirection: Flickable.VerticalFlick
+              QQC.ScrollBar.vertical: QQC.ScrollBar {
+                id: authorsScrollBar
+                policy: authorsFlick.contentHeight > authorsFlick.height
+                  ? QQC.ScrollBar.AlwaysOn
+                  : QQC.ScrollBar.AlwaysOff
+                implicitWidth: 2
+                width: 2
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                contentItem: Rectangle {
+                  implicitWidth: 2
+                  width: 2
+                  radius: 1
+                  color: Util.alpha(
+                    Color.popups.text,
+                    authorsScrollBar.hovered || authorsScrollBar.pressed ? 0.5 : 0.28
+                  )
+                }
+                background: Item { implicitWidth: 2 }
+              }
 
-              Repeater {
-                model: root.snapshot.authors || []
+              Column {
+                id: authorsList
+                width: Math.max(1, authorsFlick.width - 6)
+                spacing: Style.space(3)
 
-                delegate: Row {
-                  required property var modelData
-                  spacing: Style.space(3)
+                Repeater {
+                  model: root.snapshot.authors || []
 
-                  Button {
-                    text: (modelData.active ? "✓ " : "") + Model.safeLabel(modelData.key)
-                    selected: modelData.active === true
-                    bordered: modelData.active === true
-                    focusable: true
-                    tooltipText: modelData.pluginCount + " plugins · " + modelData.sampleCount + " samples"
-                    onClicked: root.selectAuthor(modelData.key)
-                  }
+                  delegate: Row {
+                    required property var modelData
+                    width: authorsList.width
+                    spacing: Style.space(4)
 
-                  Button {
-                    text: root.confirmDeleteAuthor === String(modelData.key) ? "Purge?" : "Remove"
-                    bordered: true
-                    selected: root.confirmDeleteAuthor === String(modelData.key)
-                    foreground: Color.urgent
-                    accent: Color.urgent
-                    focusable: true
-                    tooltipText: root.confirmDeleteAuthor === String(modelData.key)
-                      ? "Click again to permanently purge " + modelData.key
-                      : "Remove " + modelData.key + " and delete stored plugins"
-                    onClicked: root.requestDeleteAuthor(modelData.key)
+                    Button {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Math.max(
+                        Style.space(80),
+                        parent.width - trashAuthorButton.width - Style.space(4)
+                      )
+                      text: (modelData.active ? "✓  " : "") + Model.safeLabel(modelData.key)
+                      leftAlign: true
+                      selected: modelData.active === true
+                      bordered: modelData.active === true
+                      focusable: true
+                      tooltipText: modelData.pluginCount + " plugins · "
+                        + modelData.sampleCount + " samples"
+                      onClicked: root.selectAuthor(modelData.key)
+                    }
+
+                    Button {
+                      id: trashAuthorButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      iconText: root.confirmDeleteAuthor === String(modelData.key) ? "!" : "⌫"
+                      bordered: root.confirmDeleteAuthor === String(modelData.key)
+                      selected: root.confirmDeleteAuthor === String(modelData.key)
+                      foreground: Color.urgent
+                      accent: Color.urgent
+                      focusable: true
+                      Accessible.name: root.confirmDeleteAuthor === String(modelData.key)
+                        ? "Confirm purge " + modelData.key
+                        : "Delete " + modelData.key
+                      tooltipText: root.confirmDeleteAuthor === String(modelData.key)
+                        ? "Click again to permanently purge " + modelData.key
+                        : "Delete " + modelData.key + " and purge stored plugins"
+                      onClicked: root.requestDeleteAuthor(modelData.key)
+                    }
                   }
                 }
               }
