@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v014"
+  readonly property string buildIdentity: "plugin-pulse-widget-v015"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -20,12 +20,32 @@ BarWidget {
   readonly property string activeMetric: metric
   readonly property var enabledPluginIds: {
     var ids = []
-    var plugins = snapshot.plugins || []
+    var plugins = pluginModel
     for (var i = 0; i < plugins.length; i++) {
       if (plugins[i] && plugins[i].enabled === true)
         ids.push(plugins[i].id)
     }
     return ids
+  }
+
+  // Flow+Repeater often ignores in-place/nested var array updates. Depend on
+  // updatedAt and return a fresh array so chips/pool rebuild on add/remove.
+  readonly property var pluginModel: {
+    var _bump = pulseService ? pulseService.updatedAt : 0
+    var src = snapshot.plugins || []
+    var out = []
+    for (var i = 0; i < src.length; i++)
+      out.push(src[i])
+    return out
+  }
+
+  readonly property var seriesModel: {
+    var _bump = pulseService ? pulseService.updatedAt : 0
+    var src = snapshot.series || []
+    var out = []
+    for (var i = 0; i < src.length; i++)
+      out.push(src[i])
+    return out
   }
   readonly property var chartSeries: Model.chartSeries(snapshot, activeMetric, enabledPluginIds)
   readonly property bool estimated: snapshot.hasEstimatedHistory === true
@@ -189,7 +209,7 @@ BarWidget {
   }
 
   readonly property bool allPluginsSelected: {
-    var plugins = snapshot.plugins || []
+    var plugins = pluginModel
     if (!plugins.length)
       return false
     for (var i = 0; i < plugins.length; i++) {
@@ -711,7 +731,7 @@ BarWidget {
                 spacing: Style.space(3)
 
                 Repeater {
-                  model: root.snapshot.plugins || []
+                  model: root.pluginModel
 
                   delegate: Row {
                     required property var modelData
@@ -1038,7 +1058,7 @@ BarWidget {
                 spacing: Style.space(3)
 
                 Repeater {
-                  model: root.snapshot.series || []
+                  model: root.seriesModel
 
                   delegate: Row {
                     required property var modelData
@@ -1151,7 +1171,7 @@ BarWidget {
             spacing: Style.space(5)
 
             Repeater {
-              model: root.snapshot.plugins || []
+              model: root.pluginModel
 
               delegate: Row {
                 required property var modelData

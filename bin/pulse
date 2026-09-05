@@ -650,7 +650,7 @@ def observe_plugin(
 
 
 def collect(author: str | None = None) -> dict[str, Any]:
-    """Refresh stats for the union of enabled authors' plugins (or DB plugins if none)."""
+    """Refresh stats for plugins already in the pool (expand pool via enable/add)."""
     conn = connect()
     try:
         # Optional --author enables that author then collects the full enabled pool.
@@ -661,7 +661,6 @@ def collect(author: str | None = None) -> dict[str, Any]:
             add_tracked_author(conn, key)
             sync_author_plugins(conn, key, enable=True)
 
-        enabled = enabled_authors_list(conn)
         now_ts = int(time.time())
         catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
         stats = fetch_json(STATS_URL, file_override=os.environ.get("PULSE_STATS_FILE"))
@@ -673,52 +672,41 @@ def collect(author: str | None = None) -> dict[str, Any]:
         if not isinstance(raw_stats, dict):
             raise PulseError("invalid-json", "stats plugins map is invalid")
 
-        # Union catalog plugins matching any enabled author.
+        # Refresh stats only for plugins already in the pool.
+        # Author enable / add-plugin expands the pool; individual remove must stick
+        # across hourly collect (do not re-upsert the full author catalog here).
         matched_by_id: dict[str, dict[str, Any]] = {}
-        if enabled:
-            for author_key in enabled:
-                for item in catalog["plugins"]:
-                    if not isinstance(item, dict):
-                        continue
-                    if not matches_author(item, author_key):
-                        continue
-                    plugin_id = str(item.get("id") or "").strip()
-                    if not plugin_id:
-                        continue
-                    matched_by_id[plugin_id] = item
-        else:
-            # No enabled authors: collect for plugins already in DB (individually added).
-            existing_ids = {
-                str(r["id"])
-                for r in conn.execute("SELECT id FROM plugins").fetchall()
-            }
-            if not existing_ids:
-                raise PulseError(
-                    "validation-failed",
-                    "Enable an author or add a plugin before collecting",
-                )
-            for item in catalog["plugins"]:
-                if not isinstance(item, dict):
+        existing_ids = {
+            str(r["id"])
+            for r in conn.execute("SELECT id FROM plugins").fetchall()
+        }
+        if not existing_ids:
+            raise PulseError(
+                "validation-failed",
+                "Enable an author or add a plugin before collecting",
+            )
+        for item in catalog["plugins"]:
+            if not isinstance(item, dict):
+                continue
+            plugin_id = str(item.get("id") or "").strip()
+            if plugin_id in existing_ids:
+                matched_by_id[plugin_id] = item
+        # DB-only plugins missing from catalog still get zeroed observe rows.
+        for pid in existing_ids:
+            if pid not in matched_by_id:
+                row = conn.execute(
+                    "SELECT id, name, author, repo, listed_at FROM plugins WHERE id = ?",
+                    (pid,),
+                ).fetchone()
+                if row is None:
                     continue
-                plugin_id = str(item.get("id") or "").strip()
-                if plugin_id in existing_ids:
-                    matched_by_id[plugin_id] = item
-            # Also observe DB-only plugins missing from catalog using zeroed stats.
-            for pid in existing_ids:
-                if pid not in matched_by_id:
-                    row = conn.execute(
-                        "SELECT id, name, author, repo, listed_at FROM plugins WHERE id = ?",
-                        (pid,),
-                    ).fetchone()
-                    if row is None:
-                        continue
-                    matched_by_id[pid] = {
-                        "id": row["id"],
-                        "name": row["name"],
-                        "author": row["author"],
-                        "repo": row["repo"],
-                        "listedAt": row["listed_at"],
-                    }
+                matched_by_id[pid] = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "author": row["author"],
+                    "repo": row["repo"],
+                    "listedAt": row["listed_at"],
+                }
 
         seeded = 0
         observed = 0

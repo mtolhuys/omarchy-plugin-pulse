@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v014"
+  readonly property string buildIdentity: "plugin-pulse-service-v015"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -22,6 +22,8 @@ Item {
   property string resolution: "daily"
   property string authorDraft: ""
   property var snapshot: Model.emptySnapshot()
+  property var plugins: []
+  property var series: []
   property double updatedAt: 0
   property bool expectedStop: false
   property string pendingAction: ""
@@ -176,6 +178,8 @@ Item {
   function applySnapshotOutput(raw) {
     var parsed = Model.parseSnapshot(raw)
     snapshot = parsed
+    plugins = parsed.plugins || []
+    series = parsed.series || []
     authorDraft = parsed.author || authorDraft
     updatedAt = Date.now()
     if (!parsed.ok) {
