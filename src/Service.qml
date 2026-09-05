@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v016"
+  readonly property string buildIdentity: "plugin-pulse-service-v017"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -216,11 +216,11 @@ Item {
       var bits = []
       var hearts = Number(a.heartsDelta || 0)
       var copies = Number(a.copiesDelta || 0)
-      if (hearts > 0) bits.push("+" + hearts + " heart" + (hearts === 1 ? "" : "s"))
-      if (copies > 0) bits.push("+" + copies + " cop" + (copies === 1 ? "y" : "ies"))
+      // Colored emoji icons for hearts / copies in the toast body.
+      if (hearts > 0) bits.push("❤️ +" + hearts)
+      if (copies > 0) bits.push("📋 +" + copies)
       if (!bits.length) continue
       var label = String(a.name || a.id || "plugin")
-      // Prefer short marketplace-style name
       if (label.indexOf("Omarchy ") === 0)
         label = label.slice(8)
       lines.push(label + " · " + bits.join(" · "))
@@ -229,13 +229,16 @@ Item {
     var body = lines.join("\n")
     if (alerts.length > limit)
       body += "\n…"
-    Quickshell.execDetached([
-      "notify-send",
-      "-a", "Plugin Pulse",
-      "-u", "normal",
-      "Marketplace growth",
-      body
-    ])
+    var icon = sourceDir ? (sourceDir + "/assets/notification-icon.png") : ""
+    var args = [
+      "omarchy-notification-send",
+      "--app-name", "Plugin Pulse",
+      "-u", "normal"
+    ]
+    if (icon)
+      args = args.concat(["-i", icon, "--image", icon])
+    args = args.concat(["Marketplace growth", body])
+    Quickshell.execDetached(args)
   }
 
   function applySnapshotOutput(raw) {
