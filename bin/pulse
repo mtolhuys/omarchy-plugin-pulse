@@ -925,6 +925,15 @@ def query_series(
             }
         )
 
+    # Totals list: most popular (copies + hearts) first.
+    series.sort(
+        key=lambda item: (
+            -(int(item["totals"].get("copies") or 0) + int(item["totals"].get("hearts") or 0)),
+            -(int(item["totals"].get("views") or 0)),
+            str(item.get("name") or "").lower(),
+        )
+    )
+
     plugin_catalog = [
         {
             "id": p["id"],
