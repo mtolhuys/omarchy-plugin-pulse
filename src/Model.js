@@ -27,6 +27,11 @@ function emptySnapshot() {
     dbBytes: 0,
     dbPath: "",
     generatedAt: 0,
+    settings: {
+      notifications: false,
+      collectIntervalMin: 60,
+      collectIntervalChoices: [5, 15, 30, 60]
+    },
     error: "",
     message: ""
   }
@@ -67,6 +72,15 @@ function parseSnapshot(raw) {
     dbBytes: Number(parsed.dbBytes || 0),
     dbPath: String(parsed.dbPath || ""),
     generatedAt: Number(parsed.generatedAt || 0),
+    settings: {
+      notifications: !!(parsed.settings && parsed.settings.notifications === true),
+      collectIntervalMin: Number(
+        (parsed.settings && parsed.settings.collectIntervalMin) || 60
+      ),
+      collectIntervalChoices: Array.isArray(parsed.settings && parsed.settings.collectIntervalChoices)
+        ? parsed.settings.collectIntervalChoices
+        : [5, 15, 30, 60]
+    },
     error: "",
     message: ""
   }

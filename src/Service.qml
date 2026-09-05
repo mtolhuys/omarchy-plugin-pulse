@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v015"
+  readonly property string buildIdentity: "plugin-pulse-service-v016"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -28,8 +28,10 @@ Item {
   property bool expectedStop: false
   property string pendingAction: ""
   property string settingsPanel: ""
+  property bool notificationsEnabled: false
+  property int collectIntervalMin: 60
 
-  readonly property int collectIntervalMs: 60 * 60 * 1000
+  readonly property int collectIntervalMs: Math.max(5, collectIntervalMin) * 60 * 1000
   readonly property int initialCollectDelayMs: 2500
 
   function runHelper(process, args) {
@@ -175,11 +177,73 @@ Item {
     return runHelper(clearProcess, ["clear"])
   }
 
+  function applySettings(settings) {
+    if (!settings || typeof settings !== "object")
+      return
+    notificationsEnabled = settings.notifications === true
+    var mins = Number(settings.collectIntervalMin || 60)
+    if ([5, 15, 30, 60].indexOf(mins) < 0)
+      mins = 60
+    if (collectIntervalMin !== mins)
+      collectIntervalMin = mins
+  }
+
+  function setNotifications(enabled) {
+    if (settingsProcess.running) return false
+    pendingAction = "refresh-after-settings"
+    return runHelper(settingsProcess, ["set-notifications", enabled ? "on" : "off"])
+  }
+
+  function setCollectInterval(minutes) {
+    if (settingsProcess.running) return false
+    var mins = Number(minutes || 60)
+    if ([5, 15, 30, 60].indexOf(mins) < 0) {
+      lastError = "Refresh interval must be 5, 15, 30, or 60 minutes"
+      return false
+    }
+    pendingAction = "refresh-after-settings"
+    return runHelper(settingsProcess, ["set-collect-interval", String(mins)])
+  }
+
+  function emitGrowthAlerts(alerts) {
+    if (!notificationsEnabled || !alerts || !alerts.length)
+      return
+    var lines = []
+    var limit = Math.min(alerts.length, 6)
+    for (var i = 0; i < limit; i++) {
+      var a = alerts[i]
+      if (!a) continue
+      var bits = []
+      var hearts = Number(a.heartsDelta || 0)
+      var copies = Number(a.copiesDelta || 0)
+      if (hearts > 0) bits.push("+" + hearts + " heart" + (hearts === 1 ? "" : "s"))
+      if (copies > 0) bits.push("+" + copies + " cop" + (copies === 1 ? "y" : "ies"))
+      if (!bits.length) continue
+      var label = String(a.name || a.id || "plugin")
+      // Prefer short marketplace-style name
+      if (label.indexOf("Omarchy ") === 0)
+        label = label.slice(8)
+      lines.push(label + " · " + bits.join(" · "))
+    }
+    if (!lines.length) return
+    var body = lines.join("\n")
+    if (alerts.length > limit)
+      body += "\n…"
+    Quickshell.execDetached([
+      "notify-send",
+      "-a", "Plugin Pulse",
+      "-u", "normal",
+      "Marketplace growth",
+      body
+    ])
+  }
+
   function applySnapshotOutput(raw) {
     var parsed = Model.parseSnapshot(raw)
     snapshot = parsed
     plugins = parsed.plugins || []
     series = parsed.series || []
+    applySettings(parsed.settings)
     authorDraft = parsed.author || authorDraft
     updatedAt = Date.now()
     if (!parsed.ok) {
@@ -207,7 +271,9 @@ Item {
       seriesCount: snapshot.series ? snapshot.series.length : 0,
       totals: snapshot.totals,
       dbBytes: snapshot.dbBytes,
-      lastCollectAt: snapshot.lastCollectAt
+      lastCollectAt: snapshot.lastCollectAt,
+      notificationsEnabled: notificationsEnabled,
+      collectIntervalMin: collectIntervalMin
     }
   }
 
@@ -238,6 +304,9 @@ Item {
       }
       root.collectState = "ready"
       root.lastError = ""
+      if (parsed.settings)
+        root.applySettings(parsed.settings)
+      root.emitGrowthAlerts(parsed.alerts || [])
       root.refreshSnapshot()
     }
   }
@@ -330,6 +399,26 @@ Item {
     }
   }
 
+
+  Process {
+    id: settingsProcess
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      id: settingsStderr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.lastError = Model.diagnosticText(settingsStderr.text, "Could not update settings")
+        root.pendingAction = ""
+        return
+      }
+      root.pendingAction = ""
+      root.refreshSnapshot()
+    }
+  }
+
   Process {
     id: archiveProcess
     command: []
@@ -370,6 +459,12 @@ Item {
     repeat: true
     running: true
     onTriggered: root.collectNow()
+  }
+
+  onCollectIntervalMinChanged: {
+    collectTimer.stop()
+    collectTimer.interval = root.collectIntervalMs
+    collectTimer.start()
   }
 
   Timer {

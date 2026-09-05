@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v016"
+  readonly property string buildIdentity: "plugin-pulse-widget-v017"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -51,6 +51,13 @@ BarWidget {
   readonly property bool estimated: snapshot.hasEstimatedHistory === true
   readonly property string authorValue: pulseService ? String(pulseService.authorDraft || snapshot.author || "") : ""
   readonly property string resolutionValue: pulseService ? String(pulseService.resolution || "daily") : "daily"
+  readonly property bool notificationsEnabled: pulseService
+    ? pulseService.notificationsEnabled === true
+    : false
+  readonly property int collectIntervalMin: {
+    var n = pulseService ? Number(pulseService.collectIntervalMin || 60) : 60
+    return [5, 15, 30, 60].indexOf(n) >= 0 ? n : 60
+  }
 
   property bool popupOpen: false
   property string metric: "views"
@@ -224,6 +231,16 @@ BarWidget {
       pulseService.setAllPlugins(enabled === true)
   }
 
+  function setNotifications(enabled) {
+    if (pulseService)
+      pulseService.setNotifications(enabled === true)
+  }
+
+  function setCollectInterval(minutes) {
+    if (pulseService)
+      pulseService.setCollectInterval(minutes)
+  }
+
   function colorForKey(key) {
     var k = String(key || "")
     if (k.indexOf("#") === 0)
@@ -360,7 +377,7 @@ BarWidget {
           Row {
             id: headerLeft
             anchors.left: parent.left
-            anchors.right: refreshButton.left
+            anchors.right: headerActions.left
             anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(10)
@@ -412,16 +429,115 @@ BarWidget {
             }
           }
 
-          Button {
-            id: refreshButton
+          Row {
+            id: headerActions
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "↻"
-            tooltipText: "Refresh marketplace stats"
-            focusable: true
-            enabled: !!root.pulseService && !root.busy
-            opacity: enabled ? 1 : 0.35
-            onClicked: root.refresh()
+            spacing: Style.space(4)
+
+            Button {
+              id: settingsButton
+              iconText: "⚙"
+              tooltipText: root.settingsPanel === "prefs"
+                ? "Close settings"
+                : "Settings"
+              focusable: true
+              selected: root.settingsPanel === "prefs"
+              bordered: root.settingsPanel === "prefs"
+              onClicked: root.toggleSettingsPanel("prefs")
+            }
+
+            Button {
+              id: refreshButton
+              iconText: "↻"
+              tooltipText: "Refresh marketplace stats"
+              focusable: true
+              enabled: !!root.pulseService && !root.busy
+              opacity: enabled ? 1 : 0.35
+              onClicked: root.refresh()
+            }
+          }
+        }
+
+
+        BorderSurface {
+          visible: root.settingsPanel === "prefs"
+          width: parent.width
+          implicitHeight: prefsColumn.implicitHeight + Style.space(12)
+          color: Style.normalFillFor(Color.popups.text, Color.accent)
+          borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
+          radius: Style.cornerRadius
+
+          Column {
+            id: prefsColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(8)
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              text: "Settings"
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              font.bold: true
+              textFormat: Text.PlainText
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Notifications"
+              description: "Desktop alerts when hearts or copies go up (not views)"
+              checked: root.notificationsEnabled
+              foreground: Color.popups.text
+              accent: Color.accent
+              onClicked: root.setNotifications(!root.notificationsEnabled)
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(5)
+
+              Text {
+                width: parent.width
+                text: "Refresh every"
+                color: Util.alpha(Color.popups.text, 0.62)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                textFormat: Text.PlainText
+              }
+
+              Text {
+                width: parent.width
+                text: "How often Pulse checks the marketplace in the background"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                textFormat: Text.PlainText
+              }
+
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Repeater {
+                  model: [5, 15, 30, 60]
+
+                  delegate: Button {
+                    required property var modelData
+                    text: modelData + " min"
+                    selected: root.collectIntervalMin === modelData
+                    bordered: root.collectIntervalMin === modelData
+                    focusable: true
+                    onClicked: root.setCollectInterval(modelData)
+                  }
+                }
+              }
+            }
           }
         }
 

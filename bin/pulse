@@ -134,6 +134,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
     if get_config(conn, "seed_notice") is None:
         set_config(conn, "seed_notice", "1")
+    if get_config(conn, "notifications_enabled") is None:
+        set_config(conn, "notifications_enabled", "0")
+    if get_config(conn, "collect_interval_min") is None:
+        set_config(conn, "collect_interval_min", "60")
     conn.commit()
 
 
@@ -148,6 +152,71 @@ def set_config(conn: sqlite3.Connection, key: str, value: str) -> None:
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+
+
+ALLOWED_COLLECT_INTERVALS = (5, 15, 30, 60)
+
+
+def collect_interval_min(conn: sqlite3.Connection) -> int:
+    raw = get_config(conn, "collect_interval_min")
+    try:
+        n = int(raw or "60")
+    except ValueError:
+        n = 60
+    return n if n in ALLOWED_COLLECT_INTERVALS else 60
+
+
+def notifications_enabled(conn: sqlite3.Connection) -> bool:
+    return get_config(conn, "notifications_enabled") == "1"
+
+
+def settings_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    return {
+        "notifications": notifications_enabled(conn),
+        "collectIntervalMin": collect_interval_min(conn),
+        "collectIntervalChoices": list(ALLOWED_COLLECT_INTERVALS),
+    }
+
+
+def set_notifications(enabled: bool) -> dict[str, Any]:
+    conn = connect()
+    try:
+        set_config(conn, "notifications_enabled", "1" if enabled else "0")
+        conn.commit()
+        return {"ok": True, "settings": settings_payload(conn)}
+    finally:
+        conn.close()
+
+
+def set_collect_interval(minutes: int) -> dict[str, Any]:
+    try:
+        n = int(minutes)
+    except (TypeError, ValueError) as exc:
+        raise PulseError("validation-failed", "interval must be 5, 15, 30, or 60") from exc
+    if n not in ALLOWED_COLLECT_INTERVALS:
+        raise PulseError("validation-failed", "interval must be 5, 15, 30, or 60")
+    conn = connect()
+    try:
+        set_config(conn, "collect_interval_min", str(n))
+        conn.commit()
+        return {"ok": True, "settings": settings_payload(conn)}
+    finally:
+        conn.close()
+
+
+def latest_observe_value(
+    conn: sqlite3.Connection, plugin_id: str, metric: str
+) -> int | None:
+    row = conn.execute(
+        """
+        SELECT value FROM samples
+        WHERE plugin_id = ? AND metric = ? AND source = 'observe'
+        ORDER BY ts DESC LIMIT 1
+        """,
+        (plugin_id, metric),
+    ).fetchone()
+    return int(row["value"]) if row is not None else None
+
 
 
 def _allowed_url(url: str) -> bool:
@@ -607,8 +676,12 @@ def observe_plugin(
     item: dict[str, Any],
     raw_stats: dict[str, Any],
     now_ts: int,
-) -> tuple[int, int]:
-    """Upsert plugin + seed/observe samples. Returns (seeded, observed) point counts."""
+) -> tuple[int, int, dict[str, Any] | None]:
+    """Upsert plugin + seed/observe samples.
+
+    Returns (seeded, observed, alert_or_none). Alerts only for copies/hearts
+    increases vs the previous observe (never on first seed).
+    """
     plugin_id = str(item["id"])
     name = str(item.get("name") or plugin_id)
     plugin_author = str(item.get("author") or "")
@@ -636,6 +709,25 @@ def observe_plugin(
     seeded = 0
     observed = 0
     first_time = not has_observe(conn, plugin_id)
+    alert: dict[str, Any] | None = None
+    if not first_time:
+        copies_delta = 0
+        hearts_delta = 0
+        prev_c = latest_observe_value(conn, plugin_id, "copies")
+        prev_h = latest_observe_value(conn, plugin_id, "hearts")
+        if prev_c is not None and values["copies"] > prev_c:
+            copies_delta = values["copies"] - prev_c
+        if prev_h is not None and values["hearts"] > prev_h:
+            hearts_delta = values["hearts"] - prev_h
+        if copies_delta or hearts_delta:
+            alert = {
+                "id": plugin_id,
+                "name": name,
+                "copiesDelta": copies_delta,
+                "heartsDelta": hearts_delta,
+                "copies": values["copies"],
+                "hearts": values["hearts"],
+            }
     if first_time:
         for metric in METRICS:
             for ts, value in seed_series(listed_ts, now_ts, values[metric]):
@@ -646,7 +738,7 @@ def observe_plugin(
     for metric in METRICS:
         insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
         observed += 1
-    return seeded, observed
+    return seeded, observed, alert
 
 
 def collect(author: str | None = None) -> dict[str, Any]:
@@ -710,10 +802,13 @@ def collect(author: str | None = None) -> dict[str, Any]:
 
         seeded = 0
         observed = 0
+        alerts: list[dict[str, Any]] = []
         for item in matched_by_id.values():
-            s, o = observe_plugin(conn, item, raw_stats, now_ts)
+            s, o, alert = observe_plugin(conn, item, raw_stats, now_ts)
             seeded += s
             observed += o
+            if alert is not None:
+                alerts.append(alert)
 
         display_author = enabled_authors_display(conn) or (get_config(conn, "author") or "")
         set_config(conn, "last_collect_at", str(now_ts))
@@ -724,6 +819,10 @@ def collect(author: str | None = None) -> dict[str, Any]:
         prune(conn, now_ts)
         enforce_size_cap(conn)
         conn.commit()
+        # Sort alerts by combined growth, biggest first.
+        alerts.sort(
+            key=lambda a: -(int(a.get("copiesDelta") or 0) + int(a.get("heartsDelta") or 0))
+        )
         return {
             "ok": True,
             "author": display_author,
@@ -734,6 +833,8 @@ def collect(author: str | None = None) -> dict[str, Any]:
             "collectedAt": now_ts,
             "dbBytes": db_size_bytes(),
             "hasEstimatedHistory": has_seed_data(conn),
+            "settings": settings_payload(conn),
+            "alerts": alerts if notifications_enabled(conn) else [],
         }
     finally:
         conn.close()
@@ -969,6 +1070,7 @@ def query_series(
         "dbBytes": db_size_bytes(),
         "dbPath": str(db_path()),
         "generatedAt": now_ts,
+        "settings": settings_payload(conn),
     }
 
 
@@ -1328,6 +1430,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("archive", help="Archive DB copy and drop seed history")
     sub.add_parser("clear", help="Clear all history samples")
     sub.add_parser("status", help="Show store status")
+
+    p_notify = sub.add_parser(
+        "set-notifications", help="Enable/disable hearts+copies growth notifications"
+    )
+    p_notify.add_argument("state", choices=["on", "off"])
+
+    p_interval = sub.add_parser(
+        "set-collect-interval", help="Set automatic refresh interval in minutes"
+    )
+    p_interval.add_argument(
+        "minutes", type=int, choices=list(ALLOWED_COLLECT_INTERVALS)
+    )
+
     return parser
 
 
@@ -1369,6 +1484,10 @@ def main(argv: list[str] | None = None) -> None:
             emit(clear_history())
         elif args.command == "status":
             emit(status())
+        elif args.command == "set-notifications":
+            emit(set_notifications(args.state == "on"))
+        elif args.command == "set-collect-interval":
+            emit(set_collect_interval(args.minutes))
         else:
             emit({"ok": False, "error": "unknown-command"}, 2)
     except PulseError as exc:
