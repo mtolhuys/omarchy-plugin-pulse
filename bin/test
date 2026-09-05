@@ -105,16 +105,20 @@ def main() -> int:
             print("FAIL totals", snap["series"][0]["totals"])
             failures += 1
 
-        # tracked authors seeded / listed
+        # tracked authors seeded / listed with enabled
         authors = ns["list_authors"]()
         if not authors.get("ok") or not any(a["key"] == "mtolhuys" for a in authors.get("authors") or []):
             print("FAIL authors list", authors)
+            failures += 1
+        mtol = next(a for a in authors["authors"] if a["key"] == "mtolhuys")
+        if mtol.get("enabled") is not True:
+            print("FAIL mtolhuys should be enabled", mtol)
             failures += 1
         if not snap.get("authors"):
             print("FAIL snapshot missing authors", snap.get("authors"))
             failures += 1
 
-        # add second author, ensure filter isolates series
+        # add second author — pool accumulates (no single-author filter)
         other = {
             "id": "io.github.other.demo",
             "name": "Other Demo",
@@ -129,21 +133,63 @@ def main() -> int:
         stats2["plugins"]["io.github.other.demo"] = {"views": 9, "copies": 1, "hearts": 0}
         cat_path.write_text(json.dumps(catalog2))
         stats_path.write_text(json.dumps(stats2))
-        add = ns["add_author"]("other")
-        if not add.get("ok") or add.get("author") != "other":
-            print("FAIL add-author", add)
+
+        # list order stable on enable: mtolhuys first, then other
+        add = ns["enable_author"]("other")
+        if not add.get("ok"):
+            print("FAIL enable-author", add)
             failures += 1
-        collected = ns["collect"]("other")
-        if collected.get("matched") != 1:
-            print("FAIL collect other matched", collected)
+        keys_order = [a["key"] for a in add.get("authors") or []]
+        if keys_order != ["mtolhuys", "other"]:
+            print("FAIL list order on enable", keys_order)
             failures += 1
-        snap_other = ns["query_series"](ns["connect"](), resolution="daily")
-        ids = [s["id"] for s in snap_other.get("series") or []]
-        if ids != ["io.github.other.demo"]:
-            print("FAIL author filter series", ids)
+        enabled_flags = {a["key"]: a.get("enabled") for a in add.get("authors") or []}
+        if enabled_flags.get("mtolhuys") is not True or enabled_flags.get("other") is not True:
+            print("FAIL both should be enabled", enabled_flags)
             failures += 1
-        # switch back and delete other
-        ns["set_author"]("mtolhuys")
+
+        collected = ns["collect"]()
+        if collected.get("matched") != 2:
+            print("FAIL collect union matched", collected)
+            failures += 1
+        snap_pool = ns["query_series"](ns["connect"](), resolution="daily")
+        ids = sorted(s["id"] for s in snap_pool.get("series") or [])
+        if ids != ["io.github.mtolhuys.demo", "io.github.other.demo"]:
+            print("FAIL snapshot not full pool", ids)
+            failures += 1
+        plugin_ids = sorted(p["id"] for p in snap_pool.get("plugins") or [])
+        if plugin_ids != ids:
+            print("FAIL plugins catalog not full pool", plugin_ids)
+            failures += 1
+
+        # disabling removes that author's plugins only
+        disabled = ns["disable_author"]("other")
+        if not disabled.get("ok"):
+            print("FAIL disable-author", disabled)
+            failures += 1
+        # other still tracked but not enabled
+        after_disable = {a["key"]: a.get("enabled") for a in disabled.get("authors") or []}
+        if "other" not in after_disable or after_disable["other"] is not False:
+            print("FAIL other should remain tracked disabled", disabled)
+            failures += 1
+        if after_disable.get("mtolhuys") is not True:
+            print("FAIL mtolhuys should stay enabled", disabled)
+            failures += 1
+        snap_dis = ns["query_series"](ns["connect"](), resolution="daily")
+        ids_dis = [s["id"] for s in snap_dis.get("series") or []]
+        if ids_dis != ["io.github.mtolhuys.demo"]:
+            print("FAIL disable did not remove other plugins only", ids_dis)
+            failures += 1
+
+        # re-enable accumulates again
+        ns["enable_author"]("other")
+        ns["collect"]()
+        snap_re = ns["query_series"](ns["connect"](), resolution="daily")
+        if len(snap_re.get("series") or []) != 2:
+            print("FAIL re-enable pool", [s["id"] for s in snap_re.get("series") or []])
+            failures += 1
+
+        # delete-author purges + untracks
         deleted = ns["delete_author"]("other")
         if not deleted.get("ok"):
             print("FAIL delete-author", deleted)
@@ -158,11 +204,56 @@ def main() -> int:
             print("FAIL purged plugin still in snapshot", ids_after)
             failures += 1
 
+        # enable order stable when toggling existing author
+        ns["add_author"]("alpha")
+        ns["add_author"]("beta")
+        # disable alpha then enable — order stays alpha, beta relative to tracked
+        order_before = [a["key"] for a in ns["list_authors"]()["authors"]]
+        ns["disable_author"]("alpha")
+        ns["enable_author"]("alpha")
+        order_after = [a["key"] for a in ns["list_authors"]()["authors"]]
+        if order_before != order_after:
+            print("FAIL enable reordered list", order_before, order_after)
+            failures += 1
+
+        # add-plugin / remove-plugin
+        # put other back in catalog only
+        added = ns["add_plugin"]("io.github.other.demo")
+        if not added.get("ok") or added.get("id") != "io.github.other.demo":
+            print("FAIL add-plugin", added)
+            failures += 1
+        snap_add = ns["query_series"](ns["connect"](), resolution="daily")
+        if "io.github.other.demo" not in [p["id"] for p in snap_add.get("plugins") or []]:
+            print("FAIL add-plugin missing from pool", snap_add.get("plugins"))
+            failures += 1
+        removed = ns["remove_plugin"]("io.github.other.demo")
+        if not removed.get("ok"):
+            print("FAIL remove-plugin", removed)
+            failures += 1
+        snap_rm = ns["query_series"](ns["connect"](), resolution="daily")
+        if "io.github.other.demo" in [p["id"] for p in snap_rm.get("plugins") or []]:
+            print("FAIL remove-plugin still present", snap_rm.get("plugins"))
+            failures += 1
+
         # plugin_matches_author_row
         row = {"id": plugin["id"], "name": plugin["name"], "author": plugin["author"], "repo": plugin["repo"]}
         if not ns["plugin_matches_author_row"](row, "mtolhuys"):
             print("FAIL plugin_matches_author_row")
             failures += 1
+
+        # enabled_authors migrates when missing
+        conn = ns["connect"]()
+        conn.execute("DELETE FROM config WHERE key = 'enabled_authors'")
+        conn.commit()
+        conn.close()
+        # reconnect triggers migrate
+        conn2 = ns["connect"]()
+        enabled = ns["enabled_authors_list"](conn2)
+        tracked = ns["tracked_authors_list"](conn2)
+        if set(a.lower() for a in enabled) != set(a.lower() for a in tracked):
+            print("FAIL migrate enabled_authors", enabled, tracked)
+            failures += 1
+        conn2.close()
 
     # manifest sanity
     manifest = json.loads((ROOT / "manifest.json").read_text())

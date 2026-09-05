@@ -125,6 +125,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         set_config(conn, "author", "")
     if get_config(conn, "tracked_authors") is None:
         set_config(conn, "tracked_authors", "[]")
+    if get_config(conn, "enabled_authors") is None:
+        # Migrate: missing enabled_authors => all tracked authors ON
+        set_config(
+            conn,
+            "enabled_authors",
+            json.dumps(tracked_authors_list(conn), ensure_ascii=True),
+        )
     if get_config(conn, "seed_notice") is None:
         set_config(conn, "seed_notice", "1")
     conn.commit()
@@ -301,21 +308,66 @@ def save_tracked_authors(conn: sqlite3.Connection, authors: list[str]) -> None:
     set_config(conn, "tracked_authors", json.dumps(cleaned, ensure_ascii=True))
 
 
-def add_tracked_author(conn: sqlite3.Connection, key: str) -> str:
-    """Ensure author is tracked and active without reordering existing entries."""
+def enabled_authors_list(conn: sqlite3.Connection) -> list[str]:
+    """Enabled author keys in tracked order (stable). Subset of tracked_authors."""
+    tracked = tracked_authors_list(conn)
+    raw = get_config(conn, "enabled_authors")
+    if raw is None:
+        return list(tracked)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return list(tracked)
+    if not isinstance(parsed, list):
+        return list(tracked)
+    enabled_lows: set[str] = set()
+    for item in parsed:
+        key = str(item or "").strip()
+        if key:
+            enabled_lows.add(key.lower())
+    return [a for a in tracked if a.lower() in enabled_lows]
+
+
+def save_enabled_authors(conn: sqlite3.Connection, authors: list[str]) -> None:
+    """Persist enabled keys; keep only those still in tracked_authors; preserve tracked order."""
+    tracked = tracked_authors_list(conn)
+    wanted = {str(a or "").strip().lower() for a in authors if str(a or "").strip()}
+    cleaned = [a for a in tracked if a.lower() in wanted]
+    set_config(conn, "enabled_authors", json.dumps(cleaned, ensure_ascii=True))
+
+
+def ensure_author_tracked(conn: sqlite3.Connection, key: str) -> str:
+    """Ensure author is in tracked_authors without reordering existing entries."""
     author_key = key.strip()
     authors = tracked_authors_list(conn)
     low = author_key.lower()
     if not any(a.lower() == low for a in authors):
         authors.append(author_key)
         save_tracked_authors(conn, authors)
+    return author_key
+
+
+def add_tracked_author(conn: sqlite3.Connection, key: str) -> str:
+    """Ensure author is tracked + enabled; set last-focused author. No reorder."""
+    author_key = ensure_author_tracked(conn, key)
+    enabled = enabled_authors_list(conn)
+    low = author_key.lower()
+    if not any(a.lower() == low for a in enabled):
+        # Append in tracked order via save_enabled_authors
+        enabled_keys = [a for a in tracked_authors_list(conn) if a.lower() == low or any(
+            e.lower() == a.lower() for e in enabled
+        )]
+        # Rebuild: current enabled + this key if missing, in tracked order
+        enabled_lows = {a.lower() for a in enabled} | {low}
+        enabled_keys = [a for a in tracked_authors_list(conn) if a.lower() in enabled_lows]
+        save_enabled_authors(conn, enabled_keys)
     set_config(conn, "author", author_key)
     return author_key
 
 
 def authors_payload(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    active = (get_config(conn, "author") or "").strip()
-    active_low = active.lower()
+    enabled = enabled_authors_list(conn)
+    enabled_lows = {a.lower() for a in enabled}
     tracked = tracked_authors_list(conn)
     rows = conn.execute(
         "SELECT id, name, author, repo FROM plugins"
@@ -334,21 +386,104 @@ def authors_payload(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             if plugin_matches_author_row(row, key)
         ]
         sample_count = sum(sample_counts.get(pid, 0) for pid in matching_ids)
+        is_enabled = key.lower() in enabled_lows
         out.append(
             {
                 "key": key,
                 "pluginCount": len(matching_ids),
                 "sampleCount": sample_count,
-                "active": key.lower() == active_low,
+                "enabled": is_enabled,
+                # Back-compat for older UI that read `active`
+                "active": is_enabled,
             }
         )
     return out
 
 
-def filter_plugins_for_author(plugins: list[Any], author_key: str) -> list[Any]:
-    return [p for p in plugins if plugin_matches_author_row(p, author_key)]
+def enabled_authors_display(conn: sqlite3.Connection) -> str:
+    enabled = enabled_authors_list(conn)
+    if not enabled:
+        return ""
+    if len(enabled) == 1:
+        return enabled[0]
+    return ", ".join(enabled)
+
+
+def remove_plugins_for_author(conn: sqlite3.Connection, author_key: str) -> list[str]:
+    """Delete plugins matching author_key (+ their samples). Returns purged ids."""
+    rows = conn.execute(
+        "SELECT id, name, author, repo FROM plugins"
+    ).fetchall()
+    matching_ids = [
+        str(row["id"])
+        for row in rows
+        if plugin_matches_author_row(row, author_key)
+    ]
+    if matching_ids:
+        placeholders = ",".join("?" * len(matching_ids))
+        conn.execute(
+            f"DELETE FROM samples WHERE plugin_id IN ({placeholders})",
+            matching_ids,
+        )
+        conn.execute(
+            f"DELETE FROM plugins WHERE id IN ({placeholders})",
+            matching_ids,
+        )
+    return matching_ids
+
+
+def sync_author_plugins(
+    conn: sqlite3.Connection,
+    author_key: str,
+    *,
+    enable: bool,
+    catalog: dict[str, Any] | None = None,
+) -> int:
+    """When enable=True, upsert matching catalog plugins (preserve existing enabled).
+    When enable=False, remove matching plugins + samples.
+    Returns number of plugins upserted or removed.
+    """
+    key = author_key.strip()
+    if not key:
+        return 0
+    if not enable:
+        return len(remove_plugins_for_author(conn, key))
+
+    if catalog is None:
+        catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("plugins"), list):
+        raise PulseError("invalid-json", "catalog shape is unsupported")
+
+    now_ts = int(time.time())
+    count = 0
+    for item in catalog["plugins"]:
+        if not isinstance(item, dict):
+            continue
+        if not matches_author(item, key):
+            continue
+        plugin_id = str(item.get("id") or "").strip()
+        if not plugin_id:
+            continue
+        name = str(item.get("name") or plugin_id)
+        plugin_author = str(item.get("author") or "")
+        repo = str(item.get("repo") or "") or None
+        listed_raw = item.get("listedAt") or item.get("addedAt")
+        listed_at = str(listed_raw) if listed_raw else None
+        upsert_plugin(
+            conn,
+            plugin_id=plugin_id,
+            name=name,
+            author=plugin_author,
+            repo=repo,
+            listed_at=listed_at,
+            now_ts=now_ts,
+        )
+        count += 1
+    return count
+
 
 def parse_listed_at(value: Any) -> int | None:
+
     if not value or not isinstance(value, str):
         return None
     text = value.strip()
@@ -467,17 +602,66 @@ def insert_sample(
     )
 
 
+def observe_plugin(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    raw_stats: dict[str, Any],
+    now_ts: int,
+) -> tuple[int, int]:
+    """Upsert plugin + seed/observe samples. Returns (seeded, observed) point counts."""
+    plugin_id = str(item["id"])
+    name = str(item.get("name") or plugin_id)
+    plugin_author = str(item.get("author") or "")
+    repo = str(item.get("repo") or "") or None
+    listed_raw = item.get("listedAt") or item.get("addedAt")
+    listed_at = str(listed_raw) if listed_raw else None
+    listed_ts = parse_listed_at(listed_at) or (now_ts - 14 * 86400)
+    upsert_plugin(
+        conn,
+        plugin_id=plugin_id,
+        name=name,
+        author=plugin_author,
+        repo=repo,
+        listed_at=listed_at,
+        now_ts=now_ts,
+    )
+    metrics = raw_stats.get(plugin_id) or {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    values = {
+        "views": int(metrics.get("views") or 0),
+        "copies": int(metrics.get("copies") or 0),
+        "hearts": int(metrics.get("hearts") or 0),
+    }
+    seeded = 0
+    observed = 0
+    first_time = not has_observe(conn, plugin_id)
+    if first_time:
+        for metric in METRICS:
+            for ts, value in seed_series(listed_ts, now_ts, values[metric]):
+                if ts >= now_ts:
+                    continue
+                insert_sample(conn, plugin_id, metric, ts, value, "seed")
+                seeded += 1
+    for metric in METRICS:
+        insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
+        observed += 1
+    return seeded, observed
+
+
 def collect(author: str | None = None) -> dict[str, Any]:
+    """Refresh stats for the union of enabled authors' plugins (or DB plugins if none)."""
     conn = connect()
     try:
-        author_key = (author or get_config(conn, "author") or "").strip()
-        if not author_key:
-            raise PulseError("validation-failed", "Add an author before collecting")
+        # Optional --author enables that author then collects the full enabled pool.
         if author:
-            add_tracked_author(conn, author_key)
-        else:
-            # Ensure current author is tracked
-            add_tracked_author(conn, author_key)
+            key = author.strip()
+            if not key:
+                raise PulseError("validation-failed", "author must be 1–120 characters")
+            add_tracked_author(conn, key)
+            sync_author_plugins(conn, key, enable=True)
+
+        enabled = enabled_authors_list(conn)
         now_ts = int(time.time())
         catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
         stats = fetch_json(STATS_URL, file_override=os.environ.get("PULSE_STATS_FILE"))
@@ -489,60 +673,64 @@ def collect(author: str | None = None) -> dict[str, Any]:
         if not isinstance(raw_stats, dict):
             raise PulseError("invalid-json", "stats plugins map is invalid")
 
-        matched: list[dict[str, Any]] = []
-        for item in catalog["plugins"]:
-            if not isinstance(item, dict):
-                continue
-            if not matches_author(item, author_key):
-                continue
-            plugin_id = str(item.get("id") or "").strip()
-            if not plugin_id:
-                continue
-            matched.append(item)
+        # Union catalog plugins matching any enabled author.
+        matched_by_id: dict[str, dict[str, Any]] = {}
+        if enabled:
+            for author_key in enabled:
+                for item in catalog["plugins"]:
+                    if not isinstance(item, dict):
+                        continue
+                    if not matches_author(item, author_key):
+                        continue
+                    plugin_id = str(item.get("id") or "").strip()
+                    if not plugin_id:
+                        continue
+                    matched_by_id[plugin_id] = item
+        else:
+            # No enabled authors: collect for plugins already in DB (individually added).
+            existing_ids = {
+                str(r["id"])
+                for r in conn.execute("SELECT id FROM plugins").fetchall()
+            }
+            if not existing_ids:
+                raise PulseError(
+                    "validation-failed",
+                    "Enable an author or add a plugin before collecting",
+                )
+            for item in catalog["plugins"]:
+                if not isinstance(item, dict):
+                    continue
+                plugin_id = str(item.get("id") or "").strip()
+                if plugin_id in existing_ids:
+                    matched_by_id[plugin_id] = item
+            # Also observe DB-only plugins missing from catalog using zeroed stats.
+            for pid in existing_ids:
+                if pid not in matched_by_id:
+                    row = conn.execute(
+                        "SELECT id, name, author, repo, listed_at FROM plugins WHERE id = ?",
+                        (pid,),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    matched_by_id[pid] = {
+                        "id": row["id"],
+                        "name": row["name"],
+                        "author": row["author"],
+                        "repo": row["repo"],
+                        "listedAt": row["listed_at"],
+                    }
 
         seeded = 0
         observed = 0
-        for item in matched:
-            plugin_id = str(item["id"])
-            name = str(item.get("name") or plugin_id)
-            plugin_author = str(item.get("author") or "")
-            repo = str(item.get("repo") or "") or None
-            listed_raw = item.get("listedAt") or item.get("addedAt")
-            listed_at = str(listed_raw) if listed_raw else None
-            listed_ts = parse_listed_at(listed_at) or (now_ts - 14 * 86400)
-            upsert_plugin(
-                conn,
-                plugin_id=plugin_id,
-                name=name,
-                author=plugin_author,
-                repo=repo,
-                listed_at=listed_at,
-                now_ts=now_ts,
-            )
-            metrics = raw_stats.get(plugin_id) or {}
-            if not isinstance(metrics, dict):
-                metrics = {}
-            values = {
-                "views": int(metrics.get("views") or 0),
-                "copies": int(metrics.get("copies") or 0),
-                "hearts": int(metrics.get("hearts") or 0),
-            }
-            first_time = not has_observe(conn, plugin_id)
-            if first_time:
-                for metric in METRICS:
-                    for ts, value in seed_series(listed_ts, now_ts, values[metric]):
-                        # Keep the terminal seed point as observe below.
-                        if ts >= now_ts:
-                            continue
-                        insert_sample(conn, plugin_id, metric, ts, value, "seed")
-                        seeded += 1
-            for metric in METRICS:
-                insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
-                observed += 1
+        for item in matched_by_id.values():
+            s, o = observe_plugin(conn, item, raw_stats, now_ts)
+            seeded += s
+            observed += o
 
+        display_author = enabled_authors_display(conn) or (get_config(conn, "author") or "")
         set_config(conn, "last_collect_at", str(now_ts))
-        set_config(conn, "last_collect_author", author_key)
-        set_config(conn, "last_collect_count", str(len(matched)))
+        set_config(conn, "last_collect_author", display_author)
+        set_config(conn, "last_collect_count", str(len(matched_by_id)))
         if seeded:
             set_config(conn, "seed_notice", "1")
         prune(conn, now_ts)
@@ -550,8 +738,9 @@ def collect(author: str | None = None) -> dict[str, Any]:
         conn.commit()
         return {
             "ok": True,
-            "author": author_key,
-            "matched": len(matched),
+            "author": display_author,
+            "authors": authors_payload(conn),
+            "matched": len(matched_by_id),
             "seededPoints": seeded,
             "observedPoints": observed,
             "collectedAt": now_ts,
@@ -679,11 +868,9 @@ def query_series(
     else:
         start_ts = now_ts - MONTHLY_KEEP
 
-    author_key = (get_config(conn, "author") or "").strip()
     plugins = conn.execute(
         "SELECT id, name, author, repo, listed_at, enabled FROM plugins ORDER BY name COLLATE NOCASE"
     ).fetchall()
-    plugins = filter_plugins_for_author(plugins, author_key)
     if plugin_ids is not None:
         wanted = set(plugin_ids)
         plugins = [p for p in plugins if p["id"] in wanted]
@@ -768,9 +955,10 @@ def query_series(
             totals[metric] += int(item["totals"].get(metric) or 0)
 
     last_collect = get_config(conn, "last_collect_at")
+    display_author = enabled_authors_display(conn) or (get_config(conn, "author") or "")
     return {
         "ok": True,
-        "author": author_key,
+        "author": display_author,
         "authors": authors_payload(conn),
         "resolution": resolution,
         "stepSeconds": step,
@@ -788,50 +976,84 @@ def query_series(
 
 
 def set_author(author: str) -> dict[str, Any]:
-    author_key = author.strip()
-    if not author_key or len(author_key) > 120:
-        raise PulseError("validation-failed", "author must be 1–120 characters")
+    """Back-compat: treat as enable-author (no list reorder)."""
+    return enable_author(author)
+
+
+def list_authors() -> dict[str, Any]:
     conn = connect()
     try:
-        add_tracked_author(conn, author_key)
-        conn.commit()
         return {
             "ok": True,
-            "author": author_key,
+            "author": enabled_authors_display(conn) or (get_config(conn, "author") or ""),
             "authors": authors_payload(conn),
         }
     finally:
         conn.close()
 
 
-def list_authors() -> dict[str, Any]:
+def enable_author(author: str) -> dict[str, Any]:
+    author_key = author.strip()
+    if not author_key or len(author_key) > 120:
+        raise PulseError("validation-failed", "author must be 1–120 characters")
     conn = connect()
     try:
-        author_key = get_config(conn, "author") or ""
+        ensure_author_tracked(conn, author_key)
+        enabled = enabled_authors_list(conn)
+        low = author_key.lower()
+        if not any(a.lower() == low for a in enabled):
+            enabled_lows = {a.lower() for a in enabled} | {low}
+            ordered = [a for a in tracked_authors_list(conn) if a.lower() in enabled_lows]
+            save_enabled_authors(conn, ordered)
+        set_config(conn, "author", author_key)
+        synced = sync_author_plugins(conn, author_key, enable=True)
+        conn.commit()
         return {
             "ok": True,
-            "author": author_key,
+            "author": enabled_authors_display(conn),
             "authors": authors_payload(conn),
+            "enabled": author_key,
+            "syncedPlugins": synced,
+        }
+    finally:
+        conn.close()
+
+
+def disable_author(author: str) -> dict[str, Any]:
+    author_key = author.strip()
+    if not author_key or len(author_key) > 120:
+        raise PulseError("validation-failed", "author must be 1–120 characters")
+    conn = connect()
+    try:
+        tracked = tracked_authors_list(conn)
+        low = author_key.lower()
+        if not any(a.lower() == low for a in tracked):
+            raise PulseError("not-found", f"author not tracked: {author_key}")
+        enabled = enabled_authors_list(conn)
+        remaining_enabled = [a for a in enabled if a.lower() != low]
+        save_enabled_authors(conn, remaining_enabled)
+        purged = remove_plugins_for_author(conn, author_key)
+        current = (get_config(conn, "author") or "").strip()
+        if current.lower() == low:
+            next_author = remaining_enabled[0] if remaining_enabled else ""
+            set_config(conn, "author", next_author)
+        conn.commit()
+        if purged:
+            conn.execute("VACUUM")
+        return {
+            "ok": True,
+            "author": enabled_authors_display(conn),
+            "authors": authors_payload(conn),
+            "disabled": author_key,
+            "purgedPlugins": len(purged),
         }
     finally:
         conn.close()
 
 
 def add_author(author: str) -> dict[str, Any]:
-    author_key = author.strip()
-    if not author_key or len(author_key) > 120:
-        raise PulseError("validation-failed", "author must be 1–120 characters")
-    conn = connect()
-    try:
-        add_tracked_author(conn, author_key)
-        conn.commit()
-        return {
-            "ok": True,
-            "author": author_key,
-            "authors": authors_payload(conn),
-        }
-    finally:
-        conn.close()
+    """Track + enable + sync plugins (same as enable for new authors)."""
+    return enable_author(author)
 
 
 def delete_author(author: str) -> dict[str, Any]:
@@ -846,41 +1068,107 @@ def delete_author(author: str) -> dict[str, Any]:
         if len(remaining) == len(tracked):
             raise PulseError("not-found", f"author not tracked: {author_key}")
 
-        rows = conn.execute(
-            "SELECT id, name, author, repo FROM plugins"
-        ).fetchall()
-        matching_ids = [
-            str(row["id"])
-            for row in rows
-            if plugin_matches_author_row(row, author_key)
-        ]
-        if matching_ids:
-            placeholders = ",".join("?" * len(matching_ids))
-            conn.execute(
-                f"DELETE FROM samples WHERE plugin_id IN ({placeholders})",
-                matching_ids,
-            )
-            conn.execute(
-                f"DELETE FROM plugins WHERE id IN ({placeholders})",
-                matching_ids,
-            )
-
+        matching_ids = remove_plugins_for_author(conn, author_key)
         save_tracked_authors(conn, remaining)
+        enabled = enabled_authors_list(conn)
+        save_enabled_authors(conn, [a for a in enabled if a.lower() != low])
         current = (get_config(conn, "author") or "").strip()
         if current.lower() == low:
-            next_author = remaining[0] if remaining else ""
+            remaining_enabled = enabled_authors_list(conn)
+            next_author = remaining_enabled[0] if remaining_enabled else (remaining[0] if remaining else "")
             set_config(conn, "author", next_author)
-        else:
-            next_author = current
         conn.commit()
         conn.execute("VACUUM")
         return {
             "ok": True,
-            "author": get_config(conn, "author") or "",
+            "author": enabled_authors_display(conn) or (get_config(conn, "author") or ""),
             "authors": authors_payload(conn),
             "deleted": author_key,
             "purgedPlugins": len(matching_ids),
         }
+    finally:
+        conn.close()
+
+
+def find_catalog_plugin(plugin_id: str, catalog: dict[str, Any] | None = None) -> dict[str, Any]:
+    needle = plugin_id.strip()
+    if not needle:
+        raise PulseError("validation-failed", "plugin id required")
+    if catalog is None:
+        catalog = fetch_json(CATALOG_URL, file_override=os.environ.get("PULSE_CATALOG_FILE"))
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("plugins"), list):
+        raise PulseError("invalid-json", "catalog shape is unsupported")
+    exact: dict[str, Any] | None = None
+    suffix_hits: list[dict[str, Any]] = []
+    needle_low = needle.lower()
+    for item in catalog["plugins"]:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "").strip()
+        if not pid:
+            continue
+        if pid == needle or pid.lower() == needle_low:
+            exact = item
+            break
+        if pid.lower().endswith("." + needle_low) or pid.lower().endswith(needle_low):
+            suffix_hits.append(item)
+    if exact is not None:
+        return exact
+    if len(suffix_hits) == 1:
+        return suffix_hits[0]
+    if len(suffix_hits) > 1:
+        raise PulseError("ambiguous", f"multiple plugins match: {needle}")
+    raise PulseError("not-found", f"plugin not in catalog: {needle}")
+
+
+def add_plugin(plugin_id: str) -> dict[str, Any]:
+    conn = connect()
+    try:
+        item = find_catalog_plugin(plugin_id)
+        now_ts = int(time.time())
+        pid = str(item["id"])
+        upsert_plugin(
+            conn,
+            plugin_id=pid,
+            name=str(item.get("name") or pid),
+            author=str(item.get("author") or ""),
+            repo=str(item.get("repo") or "") or None,
+            listed_at=str(item.get("listedAt") or item.get("addedAt") or "") or None,
+            now_ts=now_ts,
+        )
+        # Force enabled=1 for chart visibility on explicit add
+        conn.execute("UPDATE plugins SET enabled = 1 WHERE id = ?", (pid,))
+        conn.commit()
+        return {
+            "ok": True,
+            "id": pid,
+            "name": str(item.get("name") or pid),
+            "author": enabled_authors_display(conn),
+            "authors": authors_payload(conn),
+        }
+    finally:
+        conn.close()
+
+
+def remove_plugin(plugin_id: str) -> dict[str, Any]:
+    pid = plugin_id.strip()
+    if not pid:
+        raise PulseError("validation-failed", "plugin id required")
+    conn = connect()
+    try:
+        row = conn.execute("SELECT id FROM plugins WHERE id = ?", (pid,)).fetchone()
+        if row is None:
+            # Try unique suffix match against stored plugins
+            rows = conn.execute("SELECT id FROM plugins").fetchall()
+            hits = [str(r["id"]) for r in rows if str(r["id"]).lower().endswith(pid.lower())]
+            if len(hits) == 1:
+                pid = hits[0]
+            else:
+                raise PulseError("not-found", f"unknown plugin id: {plugin_id}")
+        conn.execute("DELETE FROM samples WHERE plugin_id = ?", (pid,))
+        conn.execute("DELETE FROM plugins WHERE id = ?", (pid,))
+        conn.commit()
+        return {"ok": True, "id": pid, "removed": True}
     finally:
         conn.close()
 
@@ -977,7 +1265,7 @@ def status() -> dict[str, Any]:
         last_collect = get_config(conn, "last_collect_at") or None
         return {
             "ok": True,
-            "author": get_config(conn, "author") or "",
+            "author": enabled_authors_display(conn) or (get_config(conn, "author") or ""),
             "pluginCount": int(plugin_count),
             "sampleCount": int(sample_count),
             "lastCollectAt": int(last_collect) if last_collect else None,
@@ -1010,22 +1298,34 @@ def build_parser() -> argparse.ArgumentParser:
         default="daily",
     )
 
-    p_author = sub.add_parser("set-author", help="Set marketplace author filter")
+    p_author = sub.add_parser("set-author", help="Enable an author (back-compat)")
     p_author.add_argument("author")
 
     sub.add_parser("authors", help="List tracked authors and counts")
 
-    p_add = sub.add_parser("add-author", help="Track an author and make it current")
+    p_add = sub.add_parser("add-author", help="Track + enable an author and sync plugins")
     p_add.add_argument("author")
+
+    p_en = sub.add_parser("enable-author", help="Enable author and pull plugins into pool")
+    p_en.add_argument("author")
+
+    p_dis = sub.add_parser("disable-author", help="Disable author and remove their plugins")
+    p_dis.add_argument("author")
 
     p_del = sub.add_parser("delete-author", help="Untrack author and purge their data")
     p_del.add_argument("author")
 
-    p_toggle = sub.add_parser("toggle-plugin", help="Enable or disable a plugin series")
+    p_add_plugin = sub.add_parser("add-plugin", help="Add one catalog plugin to the pool")
+    p_add_plugin.add_argument("plugin_id")
+
+    p_rm_plugin = sub.add_parser("remove-plugin", help="Remove one plugin from the pool")
+    p_rm_plugin.add_argument("plugin_id")
+
+    p_toggle = sub.add_parser("toggle-plugin", help="Show/hide a plugin on the chart")
     p_toggle.add_argument("plugin_id")
     p_toggle.add_argument("state", choices=["on", "off"])
 
-    p_set = sub.add_parser("set-plugins", help="Enable or disable all tracked plugins")
+    p_set = sub.add_parser("set-plugins", help="Show/hide all tracked plugins on the chart")
     p_set.add_argument("state", choices=["on", "off"])
 
     sub.add_parser("archive", help="Archive DB copy and drop seed history")
@@ -1052,8 +1352,16 @@ def main(argv: list[str] | None = None) -> None:
             emit(list_authors())
         elif args.command == "add-author":
             emit(add_author(args.author))
+        elif args.command == "enable-author":
+            emit(enable_author(args.author))
+        elif args.command == "disable-author":
+            emit(disable_author(args.author))
         elif args.command == "delete-author":
             emit(delete_author(args.author))
+        elif args.command == "add-plugin":
+            emit(add_plugin(args.plugin_id))
+        elif args.command == "remove-plugin":
+            emit(remove_plugin(args.plugin_id))
         elif args.command == "toggle-plugin":
             emit(toggle_plugin(args.plugin_id, args.state == "on"))
         elif args.command == "set-plugins":

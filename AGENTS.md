@@ -1,6 +1,6 @@
 # Omarchy Plugin Pulse — agent notes
 
-Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marketplace views/copies/hearts for plugins matching a configurable author filter.
+Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marketplace views/copies/hearts for an accumulating multi-author plugin pool.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marke
 
 ## Invariants
 
-1. Author is configurable (default `mtolhuys`); match against author / id / repo text.
+1. Authors are multi-select (`tracked_authors` + `enabled_authors`); enabling pulls matching catalog plugins into a shared pool. Match against author / id / repo text. No baked-in default author.
 2. HTTPS only to allowlisted origins: raw.githubusercontent.com (catalog) and api.omarchyplugins.com (stats).
 3. First observe seeds smooth monotonic curves from `listedAt` → now; UI must say **Estimated history**.
 4. State under XDG state dir; retention + ~8 MiB hard cap; archive/clear available.
@@ -25,7 +25,9 @@ Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marke
 ```bash
 ./bin/pulse collect
 ./bin/pulse snapshot --resolution daily
-./bin/pulse set-author mtolhuys
+./bin/pulse enable-author <key>
+./bin/pulse disable-author <key>
+./bin/pulse authors
 ./bin/pulse status
 make test
 make validate

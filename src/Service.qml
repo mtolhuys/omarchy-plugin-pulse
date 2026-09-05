@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v011"
+  readonly property string buildIdentity: "plugin-pulse-service-v014"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -25,6 +25,7 @@ Item {
   property double updatedAt: 0
   property bool expectedStop: false
   property string pendingAction: ""
+  property string settingsPanel: ""
 
   readonly property int collectIntervalMs: 60 * 60 * 1000
   readonly property int initialCollectDelayMs: 2500
@@ -57,7 +58,7 @@ Item {
     collectState = "collecting"
     lastError = ""
     var args = ["collect"]
-    var author = String(forceAuthor || authorDraft || "").trim()
+    var author = String(forceAuthor || "").trim()
     if (author) args = args.concat(["--author", author])
     return runHelper(collectProcess, args)
   }
@@ -74,6 +75,11 @@ Item {
   }
 
   function setAuthor(value) {
+    // Back-compat: UI select toggles enable instead of single-active filter
+    return enableAuthor(value)
+  }
+
+  function enableAuthor(value) {
     var author = String(value || "").trim()
     if (!author || author.length > 120) {
       lastError = "Author must be 1–120 characters"
@@ -82,7 +88,22 @@ Item {
     if (authorProcess.running) return false
     authorDraft = author
     pendingAction = "collect-after-author"
-    return runHelper(authorProcess, ["set-author", author])
+    return runHelper(authorProcess, ["enable-author", author])
+  }
+
+  function disableAuthor(value) {
+    var author = String(value || "").trim()
+    if (!author || author.length > 120) {
+      lastError = "Author must be 1–120 characters"
+      return false
+    }
+    if (authorProcess.running) return false
+    pendingAction = "refresh-after-delete"
+    return runHelper(authorProcess, ["disable-author", author])
+  }
+
+  function toggleAuthorEnabled(value, enabled) {
+    return enabled ? enableAuthor(value) : disableAuthor(value)
   }
 
   function addAuthor(value) {
@@ -106,6 +127,28 @@ Item {
     if (authorProcess.running) return false
     pendingAction = "refresh-after-delete"
     return runHelper(authorProcess, ["delete-author", author])
+  }
+
+  function addPlugin(pluginId) {
+    var id = String(pluginId || "").trim()
+    if (!id) {
+      lastError = "Plugin id required"
+      return false
+    }
+    if (pluginProcess.running) return false
+    pendingAction = "collect-after-plugin"
+    return runHelper(pluginProcess, ["add-plugin", id])
+  }
+
+  function removePlugin(pluginId) {
+    var id = String(pluginId || "").trim()
+    if (!id) {
+      lastError = "Plugin id required"
+      return false
+    }
+    if (pluginProcess.running) return false
+    pendingAction = "refresh-after-plugin"
+    return runHelper(pluginProcess, ["remove-plugin", id])
   }
 
   function togglePlugin(pluginId, enabled) {
@@ -152,6 +195,7 @@ Item {
       snapshotState: snapshotState,
       resolution: resolution,
       author: authorDraft,
+      settingsPanel: settingsPanel,
       lastError: lastError,
       updatedAt: updatedAt,
       hasEstimatedHistory: snapshot.hasEstimatedHistory === true,
@@ -231,11 +275,35 @@ Item {
       }
       if (root.pendingAction === "collect-after-author") {
         root.pendingAction = ""
-        root.collectNow(root.authorDraft)
+        root.collectNow()
       } else if (root.pendingAction === "refresh-after-delete") {
         root.pendingAction = ""
         root.refreshSnapshot()
       } else {
+        root.refreshSnapshot()
+      }
+    }
+  }
+
+  Process {
+    id: pluginProcess
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      id: pluginStderr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.lastError = Model.diagnosticText(pluginStderr.text, "Could not update plugins")
+        root.pendingAction = ""
+        return
+      }
+      if (root.pendingAction === "collect-after-plugin") {
+        root.pendingAction = ""
+        root.collectNow()
+      } else {
+        root.pendingAction = ""
         root.refreshSnapshot()
       }
     }

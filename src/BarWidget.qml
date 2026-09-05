@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v013"
+  readonly property string buildIdentity: "plugin-pulse-widget-v014"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -35,11 +35,36 @@ BarWidget {
   property bool popupOpen: false
   property string metric: "views"
   property string authorEdit: ""
-  property bool settingsOpen: false
+  property string settingsPanel: ""
   property bool confirmClear: false
   property string confirmDeleteAuthor: ""
+  property string confirmRemovePlugin: ""
   property string authorAddDraft: ""
+  property string pluginAddDraft: ""
   property real selectedTs: 0
+
+  readonly property bool settingsOpen: settingsPanel !== ""
+  readonly property int enabledAuthorCount: {
+    var authors = snapshot.authors || []
+    var n = 0
+    for (var i = 0; i < authors.length; i++) {
+      if (authors[i] && (authors[i].enabled === true || authors[i].active === true))
+        n++
+    }
+    return n
+  }
+  readonly property string enabledAuthorsLabel: {
+    var authors = snapshot.authors || []
+    var keys = []
+    for (var i = 0; i < authors.length; i++) {
+      if (authors[i] && (authors[i].enabled === true || authors[i].active === true))
+        keys.push(String(authors[i].key || ""))
+    }
+    if (!keys.length) return "no authors"
+    if (keys.length === 1) return keys[0]
+    if (keys.length === 2) return keys[0] + " · " + keys[1]
+    return keys.length + " authors"
+  }
 
   readonly property var timeSlice: Model.sliceAtTime(chartSeries, selectedTs || 0)
 
@@ -58,10 +83,12 @@ BarWidget {
   }
 
   function close() {
-    settingsOpen = false
+    settingsPanel = ""
     confirmClear = false
     confirmDeleteAuthor = ""
+    confirmRemovePlugin = ""
     authorAddDraft = ""
+    pluginAddDraft = ""
     popupOpen = false
   }
   function closeForPopoutSwitch() { close() }
@@ -86,19 +113,27 @@ BarWidget {
     selectedTs = 0
   }
 
-  function saveAuthor() {
-    if (!pulseService) return
-    pulseService.setAuthor(authorEdit)
-    settingsOpen = false
+  function toggleSettingsPanel(panel) {
+    var next = String(panel || "")
+    settingsPanel = settingsPanel === next ? "" : next
+    confirmDeleteAuthor = ""
+    confirmRemovePlugin = ""
   }
 
-  function selectAuthor(key) {
+  function authorIsEnabled(modelData) {
+    return !!(modelData && (modelData.enabled === true || modelData.active === true))
+  }
+
+  function toggleAuthorRow(key, currentlyEnabled) {
     if (!pulseService) return
     var author = String(key || "").trim()
     if (!author) return
     authorEdit = author
     confirmDeleteAuthor = ""
-    pulseService.setAuthor(author)
+    if (currentlyEnabled)
+      pulseService.disableAuthor(author)
+    else
+      pulseService.enableAuthor(author)
   }
 
   function addTrackedAuthor() {
@@ -120,6 +155,26 @@ BarWidget {
       return
     }
     confirmDeleteAuthor = author
+  }
+
+  function addTrackedPlugin() {
+    if (!pulseService) return
+    var id = String(pluginAddDraft || "").trim()
+    if (!id) return
+    pluginAddDraft = ""
+    confirmRemovePlugin = ""
+    pulseService.addPlugin(id)
+  }
+
+  function requestRemovePlugin(pluginId) {
+    var id = String(pluginId || "").trim()
+    if (!id) return
+    if (confirmRemovePlugin === id) {
+      confirmRemovePlugin = ""
+      if (pulseService) pulseService.removePlugin(id)
+      return
+    }
+    confirmRemovePlugin = id
   }
 
   function chipLabel(name, id) {
@@ -230,7 +285,8 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    focusTarget: root.settingsOpen ? authorAddField : lineChart
+    focusTarget: root.settingsPanel === "authors" ? authorAddField
+      : (root.settingsPanel === "plugins" ? pluginAddField : lineChart)
     contentWidth: popup.fittedContentWidth(Style.space(520))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight)
 
@@ -251,8 +307,9 @@ BarWidget {
         context: Qt.WindowShortcut
         onActivated: {
           if (root.confirmDeleteAuthor) root.confirmDeleteAuthor = ""
+          else if (root.confirmRemovePlugin) root.confirmRemovePlugin = ""
           else if (root.confirmClear) root.confirmClear = false
-          else if (root.settingsOpen) root.settingsOpen = false
+          else if (root.settingsPanel !== "") root.settingsPanel = ""
           else root.close()
         }
       }
@@ -383,6 +440,7 @@ BarWidget {
 
             delegate: Button {
               required property var modelData
+              anchors.verticalCenter: parent.verticalCenter
               text: modelData.label
               selected: root.metric === modelData.id
               bordered: root.metric === modelData.id
@@ -394,16 +452,26 @@ BarWidget {
           Item { width: Style.space(8); height: 1 }
 
           Button {
+            anchors.verticalCenter: parent.verticalCenter
             text: "Author"
-            iconText: "✎"
-            selected: root.settingsOpen
+            selected: root.settingsPanel === "authors"
+            bordered: root.settingsPanel === "authors"
             focusable: true
-            onClicked: root.settingsOpen = !root.settingsOpen
+            onClicked: root.toggleSettingsPanel("authors")
+          }
+
+          Button {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Plugins"
+            selected: root.settingsPanel === "plugins"
+            bordered: root.settingsPanel === "plugins"
+            focusable: true
+            onClicked: root.toggleSettingsPanel("plugins")
           }
         }
 
         BorderSurface {
-          visible: root.settingsOpen
+          visible: root.settingsPanel === "authors"
           width: parent.width
           implicitHeight: settingsColumn.implicitHeight + Style.space(12)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
@@ -430,7 +498,7 @@ BarWidget {
 
             Text {
               width: parent.width
-              text: "Tap a row to switch · trash purges stored plugins"
+              text: "Enable adds that author’s plugins to the pool · trash removes the author"
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -492,14 +560,14 @@ BarWidget {
                         Style.space(80),
                         parent.width - trashAuthorButton.width - Style.space(4)
                       )
-                      text: (modelData.active ? "✓  " : "") + Model.safeLabel(modelData.key)
+                      text: (root.authorIsEnabled(modelData) ? "✓  " : "") + Model.safeLabel(modelData.key)
                       leftAlign: true
-                      selected: modelData.active === true
-                      bordered: modelData.active === true
+                      selected: root.authorIsEnabled(modelData)
+                      bordered: root.authorIsEnabled(modelData)
                       focusable: true
                       tooltipText: modelData.pluginCount + " plugins · "
                         + modelData.sampleCount + " samples"
-                      onClicked: root.selectAuthor(modelData.key)
+                      onClicked: root.toggleAuthorRow(modelData.key, root.authorIsEnabled(modelData))
                     }
 
                     Button {
@@ -547,6 +615,172 @@ BarWidget {
                 selected: true
                 focusable: true
                 onClicked: root.addTrackedAuthor()
+              }
+            }
+          }
+        }
+
+        BorderSurface {
+          visible: root.settingsPanel === "plugins"
+          width: parent.width
+          implicitHeight: pluginsSettingsColumn.implicitHeight + Style.space(12)
+          color: Style.normalFillFor(Color.popups.text, Color.accent)
+          borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
+          radius: Style.cornerRadius
+
+          Column {
+            id: pluginsSettingsColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(8)
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              text: "Plugins"
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              font.bold: true
+              textFormat: Text.PlainText
+            }
+
+            Text {
+              width: parent.width
+              text: "Pool of tracked plugins · trash removes one · chart chips still toggle visibility"
+              color: Color.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+            }
+
+            Flickable {
+              id: pluginsFlick
+              width: parent.width
+              height: Math.min(
+                Style.space(132),
+                Math.max(Style.space(36), pluginsList.implicitHeight)
+              )
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              contentWidth: width
+              contentHeight: pluginsList.implicitHeight
+              interactive: contentHeight > height + 1
+              flickableDirection: Flickable.VerticalFlick
+              QQC.ScrollBar.vertical: QQC.ScrollBar {
+                id: pluginsScrollBar
+                policy: pluginsFlick.contentHeight > pluginsFlick.height
+                  ? QQC.ScrollBar.AlwaysOn
+                  : QQC.ScrollBar.AlwaysOff
+                implicitWidth: 2
+                width: 2
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                contentItem: Rectangle {
+                  implicitWidth: 2
+                  width: 2
+                  radius: 1
+                  color: Util.alpha(
+                    Color.popups.text,
+                    pluginsScrollBar.hovered || pluginsScrollBar.pressed ? 0.5 : 0.28
+                  )
+                }
+                background: Item { implicitWidth: 2 }
+              }
+
+              Column {
+                id: pluginsList
+                width: Math.max(1, pluginsFlick.width - 6)
+                spacing: Style.space(3)
+
+                Repeater {
+                  model: root.snapshot.plugins || []
+
+                  delegate: Row {
+                    required property var modelData
+                    width: pluginsList.width
+                    spacing: Style.space(4)
+
+                    Column {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Math.max(
+                        Style.space(80),
+                        parent.width - trashPluginButton.width - Style.space(4)
+                      )
+                      spacing: Style.space(1)
+
+                      Text {
+                        width: parent.width
+                        text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                        color: Color.popups.text
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                        textFormat: Text.PlainText
+                      }
+
+                      Text {
+                        width: parent.width
+                        text: Model.safeLabel(
+                          (modelData.author ? modelData.author + " · " : "")
+                          + String(modelData.id || "")
+                        )
+                        color: Color.muted
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideMiddle
+                        textFormat: Text.PlainText
+                      }
+                    }
+
+                    Button {
+                      id: trashPluginButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      iconText: root.confirmRemovePlugin === String(modelData.id) ? "!" : "⌫"
+                      bordered: root.confirmRemovePlugin === String(modelData.id)
+                      selected: root.confirmRemovePlugin === String(modelData.id)
+                      foreground: Color.urgent
+                      accent: Color.urgent
+                      focusable: true
+                      Accessible.name: root.confirmRemovePlugin === String(modelData.id)
+                        ? "Confirm remove " + modelData.id
+                        : "Remove " + modelData.id
+                      tooltipText: root.confirmRemovePlugin === String(modelData.id)
+                        ? "Click again to remove " + modelData.id
+                        : "Remove " + modelData.id + " from the pool"
+                      onClicked: root.requestRemovePlugin(modelData.id)
+                    }
+                  }
+                }
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              TextField {
+                id: pluginAddField
+                width: parent.width - addPluginButton.width - Style.space(6)
+                text: root.pluginAddDraft
+                placeholderText: "plugin id"
+                selectByMouse: true
+                Accessible.name: "Add plugin"
+                onTextEdited: root.pluginAddDraft = text
+                onAccepted: root.addTrackedPlugin()
+                TapHandler { onTapped: pluginAddField.forceActiveFocus() }
+              }
+
+              Button {
+                id: addPluginButton
+                text: "Add"
+                bordered: true
+                selected: true
+                focusable: true
+                onClicked: root.addTrackedPlugin()
               }
             }
           }
@@ -953,7 +1187,7 @@ BarWidget {
               width: parent.width - clearButton.width
                 - (root.confirmClear ? cancelClearButton.width + Style.space(12) : Style.space(6))
               text: Model.formatBytes(root.snapshot.dbBytes) + " · "
-                + Model.safeLabel(root.authorValue)
+                + Model.safeLabel(root.enabledAuthorsLabel)
               color: Color.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
