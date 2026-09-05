@@ -114,6 +114,12 @@ Item {
     return runHelper(toggleProcess, ["toggle-plugin", String(pluginId || ""), state])
   }
 
+  function setAllPlugins(enabled) {
+    if (toggleProcess.running) return false
+    var state = enabled ? "on" : "off"
+    return runHelper(toggleProcess, ["set-plugins", state])
+  }
+
   function archiveHistory() {
     if (archiveProcess.running) return false
     return runHelper(archiveProcess, ["archive"])

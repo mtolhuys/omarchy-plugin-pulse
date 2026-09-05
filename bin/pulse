@@ -900,6 +900,24 @@ def toggle_plugin(plugin_id: str, enabled: bool) -> dict[str, Any]:
         conn.close()
 
 
+def set_all_plugins(enabled: bool) -> dict[str, Any]:
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "UPDATE plugins SET enabled = ?",
+            (1 if enabled else 0,),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "updated": int(cur.rowcount or 0),
+        }
+    finally:
+        conn.close()
+
+
+
 def archive_db() -> dict[str, Any]:
     conn = connect()
     try:
@@ -1006,6 +1024,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_toggle.add_argument("plugin_id")
     p_toggle.add_argument("state", choices=["on", "off"])
 
+    p_set = sub.add_parser("set-plugins", help="Enable or disable all tracked plugins")
+    p_set.add_argument("state", choices=["on", "off"])
+
     sub.add_parser("archive", help="Archive DB copy and drop seed history")
     sub.add_parser("clear", help="Clear all history samples")
     sub.add_parser("status", help="Show store status")
@@ -1034,6 +1055,8 @@ def main(argv: list[str] | None = None) -> None:
             emit(delete_author(args.author))
         elif args.command == "toggle-plugin":
             emit(toggle_plugin(args.plugin_id, args.state == "on"))
+        elif args.command == "set-plugins":
+            emit(set_all_plugins(args.state == "on"))
         elif args.command == "archive":
             emit(archive_db())
         elif args.command == "clear":

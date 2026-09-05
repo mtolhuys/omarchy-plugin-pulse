@@ -560,55 +560,6 @@ BarWidget {
           }
         }
 
-        Column {
-          width: parent.width
-          spacing: Style.space(5)
-
-          Text {
-            width: parent.width
-            text: "Plugins"
-            color: Color.popups.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.subtitle
-            font.bold: true
-            textFormat: Text.PlainText
-          }
-
-          Flow {
-            width: parent.width
-            spacing: Style.space(5)
-
-            Repeater {
-              model: root.snapshot.plugins || []
-
-              delegate: Row {
-                required property var modelData
-                required property int index
-                spacing: Style.space(4)
-
-                Rectangle {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: 8
-                  height: 8
-                  radius: width / 2
-                  color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
-                  opacity: modelData.enabled === true ? 1 : 0.35
-                }
-
-                Button {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.chipLabel(modelData.name, modelData.id)
-                  selected: modelData.enabled === true
-                  focusable: true
-                  tooltipText: Model.shortPluginName(modelData.name, modelData.id)
-                    + (modelData.enabled ? " · hide" : " · show")
-                  onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
-                }
-              }
-            }
-          }
-        }
-
         BorderSurface {
           width: parent.width
           implicitHeight: totalsColumn.implicitHeight + Style.space(12)
@@ -807,6 +758,73 @@ BarWidget {
                     horizontalAlignment: Text.AlignRight
                     textFormat: Text.PlainText
                   }
+                }
+              }
+            }
+          }
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(5)
+
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - allPluginsButton.width - Style.space(8)
+              text: "Plugins"
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+              textFormat: Text.PlainText
+            }
+
+            Button {
+              id: allPluginsButton
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.allPluginsSelected ? "None" : "All"
+              bordered: true
+              focusable: true
+              tooltipText: root.allPluginsSelected
+                ? "Deselect all plugins"
+                : "Select all plugins"
+              onClicked: root.setAllPlugins(!root.allPluginsSelected)
+            }
+          }
+
+          Flow {
+            width: parent.width
+            spacing: Style.space(5)
+
+            Repeater {
+              model: root.snapshot.plugins || []
+
+              delegate: Row {
+                required property var modelData
+                required property int index
+                spacing: Style.space(4)
+
+                Rectangle {
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: 8
+                  height: 8
+                  radius: width / 2
+                  color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
+                  opacity: modelData.enabled === true ? 1 : 0.35
+                }
+
+                Button {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.chipLabel(modelData.name, modelData.id)
+                  selected: modelData.enabled === true
+                  focusable: true
+                  tooltipText: Model.shortPluginName(modelData.name, modelData.id)
+                    + (modelData.enabled ? " · hide" : " · show")
+                  onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
                 }
               }
             }
