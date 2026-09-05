@@ -590,11 +590,13 @@ BarWidget {
             anchors.margins: Style.space(9)
             spacing: Style.space(6)
 
-            readonly property real nameColW: width * 0.40
-            readonly property real metricColW: (width - nameColW) / 3
+            readonly property real scrollGutter: 6
+            readonly property real contentW: Math.max(1, width - scrollGutter)
+            readonly property real nameColW: contentW * 0.40
+            readonly property real metricColW: (contentW - nameColW) / 3
 
             Row {
-              width: parent.width
+              width: totalsColumn.contentW
 
               Text {
                 width: parent.width - freshnessText.width
@@ -619,7 +621,7 @@ BarWidget {
             }
 
             Row {
-              width: parent.width
+              width: totalsColumn.contentW
 
               Item { width: totalsColumn.nameColW; height: 1 }
 
@@ -661,7 +663,7 @@ BarWidget {
             }
 
             Row {
-              width: parent.width
+              width: totalsColumn.contentW
 
               Item { width: totalsColumn.nameColW; height: 1 }
 
