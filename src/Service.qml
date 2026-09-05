@@ -12,7 +12,7 @@ Item {
   property var barWidgetRegistry: null
   property string omarchyPath: ""
 
-  readonly property string buildIdentity: "plugin-pulse-service-v019"
+  readonly property string buildIdentity: "plugin-pulse-service-v020"
   readonly property string sourceDir: manifest ? String(manifest.__sourceDir || "") : ""
   readonly property string helperPath: sourceDir ? sourceDir + "/bin/pulse" : ""
 
@@ -238,7 +238,8 @@ Item {
     var args = [
       "omarchy-notification-send",
       "--app-name", "Plugin Pulse",
-      "-u", "normal"
+      "-u", "normal",
+      "-t", "10000"  // 10s (Omarchy normal default is 8s)
     ]
     if (icon)
       args = args.concat(["-i", icon, "--image", icon])
