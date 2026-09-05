@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v015"
+  readonly property string buildIdentity: "plugin-pulse-widget-v016"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -1136,7 +1136,7 @@ BarWidget {
 
         Column {
           width: parent.width
-          spacing: Style.space(5)
+          spacing: Style.space(8)
 
           Row {
             width: parent.width
@@ -1146,117 +1146,212 @@ BarWidget {
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - allPluginsButton.width - Style.space(8)
               text: "Plugins"
-              color: Color.popups.text
+              color: Util.alpha(Color.popups.text, 0.62)
               font.family: Style.font.family
-              font.pixelSize: Style.font.subtitle
+              font.pixelSize: Style.font.caption
               font.bold: true
+              font.letterSpacing: 0.6
               textFormat: Text.PlainText
             }
 
-            Button {
+            // Quiet All/None — no chrome
+            Item {
               id: allPluginsButton
               anchors.verticalCenter: parent.verticalCenter
-              text: root.allPluginsSelected ? "None" : "All"
-              bordered: true
-              focusable: true
-              tooltipText: root.allPluginsSelected
+              width: allPluginsLabel.implicitWidth + Style.space(10)
+              height: Style.space(22)
+              opacity: allHover.hovered ? 1 : 0.72
+
+              Text {
+                id: allPluginsLabel
+                anchors.centerIn: parent
+                text: root.allPluginsSelected ? "None" : "All"
+                color: allHover.hovered ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                textFormat: Text.PlainText
+              }
+
+              HoverHandler { id: allHover }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.setAllPlugins(!root.allPluginsSelected)
+              }
+              Accessible.role: Accessible.Button
+              Accessible.name: root.allPluginsSelected
                 ? "Deselect all plugins"
                 : "Select all plugins"
-              onClicked: root.setAllPlugins(!root.allPluginsSelected)
+              Accessible.onPressAction: root.setAllPlugins(!root.allPluginsSelected)
             }
           }
 
           Flow {
             width: parent.width
-            spacing: Style.space(5)
+            spacing: Style.space(6)
 
             Repeater {
               model: root.pluginModel
 
-              delegate: Row {
+              delegate: Item {
+                id: chip
                 required property var modelData
                 required property int index
-                spacing: Style.space(4)
+
+                readonly property color accentColor: root.colorForKey(
+                  Model.colorForPluginId(modelData.id, root.snapshot.plugins)
+                )
+                readonly property bool on: modelData.enabled === true
+
+                width: chipRow.implicitWidth + Style.space(16)
+                height: Style.space(26)
 
                 Rectangle {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: 8
-                  height: 8
-                  radius: width / 2
-                  color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
-                  opacity: modelData.enabled === true ? 1 : 0.35
+                  anchors.fill: parent
+                  radius: height / 2
+                  color: {
+                    if (chip.on)
+                      return Util.alpha(chip.accentColor, chipHover.hovered ? 0.28 : 0.18)
+                    return Util.alpha(Color.popups.text, chipHover.hovered ? 0.10 : 0.05)
+                  }
+                  border.width: chip.on ? 0 : 1
+                  border.color: Util.alpha(Color.popups.text, chipHover.hovered ? 0.22 : 0.12)
                 }
 
-                Button {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.chipLabel(modelData.name, modelData.id)
-                  selected: modelData.enabled === true
-                  focusable: true
-                  tooltipText: Model.shortPluginName(modelData.name, modelData.id)
-                    + (modelData.enabled ? " · hide" : " · show")
-                  onClicked: root.togglePlugin(modelData.id, !(modelData.enabled === true))
+                Row {
+                  id: chipRow
+                  anchors.centerIn: parent
+                  spacing: Style.space(6)
+
+                  Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 7
+                    height: 7
+                    radius: width / 2
+                    color: chip.accentColor
+                    opacity: chip.on ? 1 : 0.4
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.chipLabel(modelData.name, modelData.id)
+                    color: chip.on
+                      ? Color.popups.text
+                      : Util.alpha(Color.popups.text, 0.55)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: chip.on
+                    textFormat: Text.PlainText
+                  }
                 }
+
+                HoverHandler { id: chipHover }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.togglePlugin(modelData.id, !chip.on)
+                }
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: Model.shortPluginName(modelData.name, modelData.id)
+                Accessible.checkable: true
+                Accessible.checked: chip.on
+                Accessible.onPressAction: root.togglePlugin(modelData.id, !chip.on)
               }
             }
           }
         }
 
-        BorderSurface {
+        // Quiet footer — no heavy box
+        Row {
+          id: storageRow
           width: parent.width
-          implicitHeight: storageRow.implicitHeight + Style.space(10)
-          color: Style.normalFillFor(Color.popups.text, Color.accent)
-          borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
-          radius: Style.cornerRadius
+          spacing: Style.space(8)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - clearCluster.width - Style.space(8)
+            text: Model.formatBytes(root.snapshot.dbBytes) + " · "
+              + Model.safeLabel(root.enabledAuthorsLabel)
+            color: Util.alpha(Color.popups.text, 0.45)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideMiddle
+            textFormat: Text.PlainText
+          }
 
           Row {
-            id: storageRow
-            anchors.left: parent.left
-            anchors.right: parent.right
+            id: clearCluster
             anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: Style.space(8)
-            spacing: Style.space(6)
+            spacing: Style.space(8)
 
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              width: parent.width - clearButton.width
-                - (root.confirmClear ? cancelClearButton.width + Style.space(12) : Style.space(6))
-              text: Model.formatBytes(root.snapshot.dbBytes) + " · "
-                + Model.safeLabel(root.enabledAuthorsLabel)
-              color: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideMiddle
-              textFormat: Text.PlainText
-            }
-
-            Button {
+            Item {
               id: clearButton
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.confirmClear ? "Confirm" : "Clear"
-              bordered: root.confirmClear
-              foreground: root.confirmClear ? Color.urgent : Color.popups.text
-              accent: root.confirmClear ? Color.urgent : Color.accent
-              focusable: true
-              tooltipText: "Delete all stored samples"
-              enabled: !!root.pulseService && !root.busy
-              opacity: enabled ? 1 : 0.35
-              onClicked: {
-                if (!root.confirmClear) {
-                  root.confirmClear = true
-                  return
+              width: clearLabel.implicitWidth + Style.space(8)
+              height: Style.space(22)
+              opacity: (!root.pulseService || root.busy) ? 0.35 : (clearHover.hovered ? 1 : 0.75)
+
+              Text {
+                id: clearLabel
+                anchors.centerIn: parent
+                text: root.confirmClear ? "Confirm" : "Clear"
+                color: root.confirmClear
+                  ? Color.urgent
+                  : (clearHover.hovered ? Color.popups.text : Util.alpha(Color.popups.text, 0.7))
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: root.confirmClear || clearHover.hovered
+                textFormat: Text.PlainText
+              }
+
+              HoverHandler { id: clearHover }
+              MouseArea {
+                anchors.fill: parent
+                enabled: !!root.pulseService && !root.busy
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  if (!root.confirmClear) {
+                    root.confirmClear = true
+                    return
+                  }
+                  root.confirmClear = false
+                  if (root.pulseService) root.pulseService.clearHistory()
                 }
-                root.confirmClear = false
-                if (root.pulseService) root.pulseService.clearHistory()
+              }
+              Accessible.role: Accessible.Button
+              Accessible.name: "Delete all stored samples"
+              Accessible.onPressAction: {
+                if (!root.confirmClear) root.confirmClear = true
+                else {
+                  root.confirmClear = false
+                  if (root.pulseService) root.pulseService.clearHistory()
+                }
               }
             }
 
-            Button {
+            Item {
               id: cancelClearButton
-              anchors.verticalCenter: parent.verticalCenter
               visible: root.confirmClear
-              text: "Cancel"
-              focusable: true
-              onClicked: root.confirmClear = false
+              width: visible ? cancelLabel.implicitWidth + Style.space(8) : 0
+              height: Style.space(22)
+              opacity: cancelHover.hovered ? 1 : 0.7
+
+              Text {
+                id: cancelLabel
+                anchors.centerIn: parent
+                text: "Cancel"
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                textFormat: Text.PlainText
+              }
+
+              HoverHandler { id: cancelHover }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.confirmClear = false
+              }
             }
           }
         }
