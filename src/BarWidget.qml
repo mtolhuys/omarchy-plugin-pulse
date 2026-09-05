@@ -578,16 +578,15 @@ BarWidget {
 
         BorderSurface {
           width: parent.width
-          implicitHeight: totalsColumn.implicitHeight + Style.space(12)
+          height: Style.space(176)
           color: Style.normalFillFor(Color.popups.text, Color.accent)
           borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
           radius: Style.cornerRadius
+          clip: true
 
           Column {
             id: totalsColumn
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.fill: parent
             anchors.margins: Style.space(9)
             spacing: Style.space(6)
 
@@ -700,79 +699,97 @@ BarWidget {
               }
             }
 
-            Column {
+            Flickable {
+              id: totalsSeriesFlick
               width: parent.width
-              spacing: Style.space(3)
+              height: Math.max(Style.space(56), parent.height - y)
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              contentWidth: width
+              contentHeight: totalsSeriesColumn.implicitHeight
+              interactive: contentHeight > height + 1
+              flickableDirection: Flickable.VerticalFlick
+              QQC.ScrollBar.vertical: QQC.ScrollBar {
+                policy: totalsSeriesFlick.contentHeight > totalsSeriesFlick.height
+                  ? QQC.ScrollBar.AsNeeded
+                  : QQC.ScrollBar.AlwaysOff
+              }
 
-              Repeater {
-                model: root.snapshot.series || []
+              Column {
+                id: totalsSeriesColumn
+                width: totalsSeriesFlick.width
+                spacing: Style.space(3)
 
-                delegate: Row {
-                  required property var modelData
-                  required property int index
-                  width: totalsColumn.width
+                Repeater {
+                  model: root.snapshot.series || []
 
-                  Item {
-                    width: totalsColumn.nameColW
-                    height: Math.max(nameDot.height, nameLabel.height)
-                    anchors.verticalCenter: parent.verticalCenter
+                  delegate: Row {
+                    required property var modelData
+                    required property int index
+                    width: totalsSeriesColumn.width
 
-                    Row {
-                      anchors.left: parent.left
-                      anchors.right: parent.right
+                    Item {
+                      width: totalsColumn.nameColW
+                      height: Math.max(nameDot.height, nameLabel.height)
                       anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(8)
 
-                      Rectangle {
-                        id: nameDot
+                      Row {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 8
-                        height: 8
-                        radius: width / 2
-                        color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
-                      }
+                        spacing: Style.space(8)
 
-                      Text {
-                        id: nameLabel
-                        width: Math.max(0, parent.width - nameDot.width - Style.space(8))
-                        text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
-                        color: Color.popups.text
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideRight
-                        textFormat: Text.PlainText
+                        Rectangle {
+                          id: nameDot
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: 8
+                          height: 8
+                          radius: width / 2
+                          color: root.colorForKey(Model.colorForPluginId(modelData.id, root.snapshot.plugins))
+                        }
+
+                        Text {
+                          id: nameLabel
+                          width: Math.max(0, parent.width - nameDot.width - Style.space(8))
+                          text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                          color: Color.popups.text
+                          font.family: Style.font.family
+                          font.pixelSize: Style.font.bodySmall
+                          elide: Text.ElideRight
+                          textFormat: Text.PlainText
+                        }
                       }
                     }
-                  }
 
-                  Text {
-                    width: totalsColumn.metricColW
-                    text: Model.formatCount(modelData.totals.views)
-                    color: Color.popups.text
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                    horizontalAlignment: Text.AlignRight
-                    textFormat: Text.PlainText
-                  }
+                    Text {
+                      width: totalsColumn.metricColW
+                      text: Model.formatCount(modelData.totals.views)
+                      color: Color.popups.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      horizontalAlignment: Text.AlignRight
+                      textFormat: Text.PlainText
+                    }
 
-                  Text {
-                    width: totalsColumn.metricColW
-                    text: Model.formatCount(modelData.totals.copies)
-                    color: Color.popups.text
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                    horizontalAlignment: Text.AlignRight
-                    textFormat: Text.PlainText
-                  }
+                    Text {
+                      width: totalsColumn.metricColW
+                      text: Model.formatCount(modelData.totals.copies)
+                      color: Color.popups.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      horizontalAlignment: Text.AlignRight
+                      textFormat: Text.PlainText
+                    }
 
-                  Text {
-                    width: totalsColumn.metricColW
-                    text: Model.formatCount(modelData.totals.hearts)
-                    color: Color.popups.text
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.bodySmall
-                    horizontalAlignment: Text.AlignRight
-                    textFormat: Text.PlainText
+                    Text {
+                      width: totalsColumn.metricColW
+                      text: Model.formatCount(modelData.totals.hearts)
+                      color: Color.popups.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      horizontalAlignment: Text.AlignRight
+                      textFormat: Text.PlainText
+                    }
                   }
                 }
               }
