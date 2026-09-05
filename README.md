@@ -1,8 +1,11 @@
 # Omarchy Plugin Pulse
 
-Local-first bar widget that charts marketplace growth for plugins by a configurable author (default `mtolhuys`).
+<p align="center">
+  <img src="assets/banner.png" alt="Plugin Pulse — track marketplace Views, Copies, and Hearts with authors, charts, and desktop growth alerts" width="100%" />
+</p>
 
-Plugin Pulse keeps an on-disk history of **views**, **copies**, and **hearts** from the public Omarchy marketplace stats API, joined with listing metadata from the marketplace catalog. The first collect seeds a smooth estimated curve from each plugin’s `listedAt` time to now so the chart is useful immediately; the UI labels that as **Estimated history**.
+<p align="center"><b>Local-first Omarchy bar widget</b> for marketplace growth.<br/>
+Track <b>Views · Copies · Hearts</b>, pool authors, and get alerts when you ship heat.</p>
 
 ## Install
 
