@@ -449,7 +449,21 @@ BarWidget {
             }
           }
 
-          Item { width: Style.space(8); height: 1 }
+          // Visual break: metrics (chart) vs pool management (Author / Plugins)
+          Item {
+            width: Style.space(14)
+            height: Style.space(22)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Rectangle {
+              anchors.horizontalCenter: parent.horizontalCenter
+              anchors.verticalCenter: parent.verticalCenter
+              width: 1
+              height: parent.height
+              radius: 0.5
+              color: Util.alpha(Color.popups.text, 0.28)
+            }
+          }
 
           Button {
             anchors.verticalCenter: parent.verticalCenter
