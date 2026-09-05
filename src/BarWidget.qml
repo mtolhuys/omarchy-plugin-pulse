@@ -133,6 +133,22 @@ BarWidget {
     if (pulseService) pulseService.togglePlugin(pluginId, enabled)
   }
 
+  readonly property bool allPluginsSelected: {
+    var plugins = snapshot.plugins || []
+    if (!plugins.length)
+      return false
+    for (var i = 0; i < plugins.length; i++) {
+      if (!plugins[i] || plugins[i].enabled !== true)
+        return false
+    }
+    return true
+  }
+
+  function setAllPlugins(enabled) {
+    if (pulseService)
+      pulseService.setAllPlugins(enabled === true)
+  }
+
   function colorForKey(key) {
     var k = String(key || "")
     if (k.indexOf("#") === 0)
