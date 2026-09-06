@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v019"
+  readonly property string buildIdentity: "plugin-pulse-widget-v020"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -381,6 +381,18 @@ BarWidget {
       QQC.ScrollBar.horizontal: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
       focus: true
 
+      // Prefer event.text for "?" — Shortcut "?" / Shift+/ is unreliable across layouts.
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) {
+        if (!root.panelKeysEnabled) return
+        // Mirror News Radar: event.text is the reliable "?" signal across layouts.
+        var t = event.text || ""
+        if (t === "?" || (event.key === Qt.Key_Slash && (event.modifiers & Qt.ShiftModifier))) {
+          root.toggleKeysHelp()
+          event.accepted = true
+        }
+      }
+
       Shortcut {
         sequence: "Escape"
         context: Qt.WindowShortcut
@@ -649,86 +661,50 @@ BarWidget {
             }
           }
 
-          BorderSurface {
+          // News Radar–style keys legend: bright keys + muted actions, · separators, no keycap chrome
+          Flow {
             id: keysHelpSheet
             visible: root.keysHelpOpen
             width: parent.width
-            implicitHeight: visible ? keysHelpInner.implicitHeight + Style.space(14) : 0
-            color: Style.selectedFillFor(Color.accent, Color.accent)
-            borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
-            radius: Style.cornerRadius
+            spacing: Style.space(4)
             Accessible.role: Accessible.StaticText
             Accessible.name: "Keyboard shortcuts"
 
-            Column {
-              id: keysHelpInner
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: parent.top
-              anchors.margins: Style.space(8)
-              spacing: Style.space(6)
+            Repeater {
+              model: [
+                { keys: "Esc", action: "back" },
+                { keys: "q", action: "close" },
+                { keys: "r", action: "refresh" },
+                { keys: "1–4", action: "range" },
+                { keys: "v/c/h/s", action: "metric" },
+                { keys: "a", action: "authors" },
+                { keys: "p", action: "plugins" },
+                { keys: ",", action: "settings" },
+                { keys: "←/→", action: "scrub" },
+                { keys: "?", action: "keys" }
+              ]
 
-              Text {
-                width: parent.width
-                text: "Shortcuts"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-                textFormat: Text.PlainText
-              }
+              delegate: Row {
+                required property var modelData
+                required property int index
+                spacing: Style.space(4)
 
-              Flow {
-                width: parent.width
-                spacing: Style.space(6)
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.keys
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  textFormat: Text.PlainText
+                }
 
-                Repeater {
-                  model: [
-                    { keys: "Esc", action: "back" },
-                    { keys: "q", action: "close" },
-                    { keys: "r", action: "refresh" },
-                    { keys: "1–4", action: "range" },
-                    { keys: "v/c/h/s", action: "metric" },
-                    { keys: "a", action: "authors" },
-                    { keys: "p", action: "plugins" },
-                    { keys: ",", action: "settings" },
-                    { keys: "←/→", action: "scrub" },
-                    { keys: "?", action: "keys" }
-                  ]
-
-                  delegate: Row {
-                    required property var modelData
-                    spacing: Style.space(4)
-
-                    BorderSurface {
-                      anchors.verticalCenter: parent.verticalCenter
-                      implicitWidth: keycapLabel.implicitWidth + Style.space(8)
-                      implicitHeight: Style.space(18)
-                      color: Style.normalFillFor(Color.popups.text, Color.accent)
-                      borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
-                      radius: Math.round(Style.cornerRadius * 0.7)
-
-                      Text {
-                        id: keycapLabel
-                        anchors.centerIn: parent
-                        text: modelData.keys
-                        color: Color.popups.text
-                        font.family: Style.font.family
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                        textFormat: Text.PlainText
-                      }
-                    }
-
-                    Text {
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: modelData.action
-                      color: Util.alpha(Color.popups.text, 0.62)
-                      font.family: Style.font.family
-                      font.pixelSize: Style.font.caption
-                      textFormat: Text.PlainText
-                    }
-                  }
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.action + (index < 9 ? " ·" : "")
+                  color: Util.alpha(Color.popups.text, 0.45)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  textFormat: Text.PlainText
                 }
               }
             }
