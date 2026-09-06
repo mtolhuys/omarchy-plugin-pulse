@@ -36,7 +36,7 @@ function emptySnapshot() {
     rangeEnd: 0,
     plugins: [],
     series: [],
-    totals: { views: 0, copies: 0, hearts: 0 },
+    totals: { views: 0, copies: 0, hearts: 0, stars: 0 },
     hasEstimatedHistory: false,
     lastCollectAt: null,
     dbBytes: 0,
@@ -80,7 +80,8 @@ function parseSnapshot(raw) {
     totals: {
       views: Number((parsed.totals && parsed.totals.views) || 0),
       copies: Number((parsed.totals && parsed.totals.copies) || 0),
-      hearts: Number((parsed.totals && parsed.totals.hearts) || 0)
+      hearts: Number((parsed.totals && parsed.totals.hearts) || 0),
+      stars: Number((parsed.totals && parsed.totals.stars) || 0)
     },
     hasEstimatedHistory: parsed.hasEstimatedHistory === true,
     lastCollectAt: parsed.lastCollectAt == null ? null : Number(parsed.lastCollectAt),

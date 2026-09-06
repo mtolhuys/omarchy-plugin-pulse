@@ -1,6 +1,6 @@
 # Omarchy Plugin Pulse — agent notes
 
-Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marketplace views/copies/hearts for an accumulating multi-author plugin pool.
+Plugin Pulse is a local-first Omarchy **service + bar-widget** that charts marketplace views/copies/hearts plus GitHub stars for an accumulating multi-author plugin pool.
 
 ## Layout
 

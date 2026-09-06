@@ -221,9 +221,11 @@ Item {
       var bits = []
       var hearts = Number(a.heartsDelta || 0)
       var copies = Number(a.copiesDelta || 0)
-      // Colored emoji icons for hearts / copies in the toast body.
+      var stars = Number(a.starsDelta || 0)
+      // Colored emoji icons for hearts / copies / stars in the toast body.
       if (hearts > 0) bits.push("❤️ +" + hearts)
       if (copies > 0) bits.push("📋 +" + copies)
+      if (stars > 0) bits.push("⭐ +" + stars)
       if (!bits.length) continue
       var label = String(a.name || a.id || "plugin")
       if (label.indexOf("Omarchy ") === 0)

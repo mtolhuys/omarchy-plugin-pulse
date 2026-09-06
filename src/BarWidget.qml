@@ -505,7 +505,7 @@ BarWidget {
             Toggle {
               width: parent.width
               label: "Notifications"
-              description: "Desktop alerts when hearts or copies go up (not views)"
+              description: "Desktop alerts when hearts, copies, or stars go up (not views)"
               checked: root.notificationsEnabled
               foreground: Color.popups.text
               accent: Color.accent
@@ -587,7 +587,8 @@ BarWidget {
             model: [
               { id: "views", label: "Views" },
               { id: "copies", label: "Copies" },
-              { id: "hearts", label: "Hearts" }
+              { id: "hearts", label: "Hearts" },
+              { id: "stars", label: "Stars" }
             ]
 
             delegate: Button {
@@ -1076,8 +1077,8 @@ BarWidget {
 
             readonly property real scrollGutter: 6
             readonly property real contentW: Math.max(1, width - scrollGutter)
-            readonly property real nameColW: contentW * 0.40
-            readonly property real metricColW: (contentW - nameColW) / 3
+            readonly property real nameColW: contentW * 0.34
+            readonly property real metricColW: (contentW - nameColW) / 4
 
             Row {
               width: totalsColumn.contentW
@@ -1144,6 +1145,18 @@ BarWidget {
                 horizontalAlignment: Text.AlignRight
                 textFormat: Text.PlainText
               }
+
+              Text {
+                width: totalsColumn.metricColW
+                text: "STARS"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.7
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
             }
 
             Row {
@@ -1177,6 +1190,17 @@ BarWidget {
                 width: totalsColumn.metricColW
                 text: Model.formatCount(root.snapshot.totals.hearts)
                 color: root.metric === "hearts" ? Color.accent : Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.title
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+              }
+
+              Text {
+                width: totalsColumn.metricColW
+                text: Model.formatCount(root.snapshot.totals.stars)
+                color: root.metric === "stars" ? Color.accent : Color.popups.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.title
                 font.bold: true
@@ -1287,6 +1311,16 @@ BarWidget {
                     Text {
                       width: totalsColumn.metricColW
                       text: Model.formatCount(modelData.totals.hearts)
+                      color: Color.popups.text
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                      horizontalAlignment: Text.AlignRight
+                      textFormat: Text.PlainText
+                    }
+
+                    Text {
+                      width: totalsColumn.metricColW
+                      text: Model.formatCount(modelData.totals.stars)
                       color: Color.popups.text
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall

@@ -57,6 +57,23 @@ def main() -> int:
     if not ns["_allowed_url"]("https://api.omarchyplugins.com/v1/stats"):
         print("FAIL stats origin blocked")
         failures += 1
+    if not ns["_allowed_url"]("https://api.github.com/repos/mtolhuys/demo"):
+        print("FAIL github origin blocked")
+        failures += 1
+
+    # GitHub repo parsing
+    if ns["parse_github_repo"]("https://github.com/mtolhuys/omarchy-disk-lens") != (
+        "mtolhuys",
+        "omarchy-disk-lens",
+    ):
+        print("FAIL parse github url")
+        failures += 1
+    if ns["parse_github_repo"]("owner/name.git") != ("owner", "name"):
+        print("FAIL parse owner/name")
+        failures += 1
+    if ns["parse_github_repo"]("https://gitlab.com/x/y") is not None:
+        print("FAIL parse non-github")
+        failures += 1
 
     # offline collect against fixture files
     catalog = {
@@ -288,6 +305,28 @@ def main() -> int:
             if alert is not None:
                 print("FAIL views-only should not alert", alert)
                 failures += 1
+            # seed stars then bump — should alert starsDelta only
+            s, o, alert = ns["observe_plugin"](
+                conn,
+                item,
+                {item["id"]: {"views": 200, "copies": 5, "hearts": 3, "stars": 10}},
+                1_700_000_400,
+            )
+            if alert is not None:
+                print("FAIL first stars observe should not alert", alert)
+                failures += 1
+            s, o, alert = ns["observe_plugin"](
+                conn,
+                item,
+                {item["id"]: {"views": 200, "copies": 5, "hearts": 3, "stars": 14}},
+                1_700_000_500,
+            )
+            if not alert or alert.get("starsDelta") != 4:
+                print("FAIL stars alert delta", alert)
+                failures += 1
+            if alert and (alert.get("copiesDelta") or alert.get("heartsDelta")):
+                print("FAIL stars-only should not include other deltas", alert)
+                failures += 1
             conn.commit()
         finally:
             conn.close()
@@ -309,6 +348,67 @@ def main() -> int:
             failures += 1
         ns["set_notifications"](False)
         ns["set_collect_interval"](60)
+
+    # offline collect with GitHub stars map
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        catalog_path = tmp_path / "catalog.json"
+        stats_path = tmp_path / "stats.json"
+        stars_path = tmp_path / "stars.json"
+        state = tmp_path / "state"
+        state.mkdir()
+        catalog_path.write_text(
+            json.dumps(
+                {
+                    "generatedAt": "2026-09-04T00:00:00Z",
+                    "plugins": [
+                        {
+                            "id": "io.github.mtolhuys.demo",
+                            "name": "Demo",
+                            "author": "Maarten Tolhuijs",
+                            "repo": "https://github.com/mtolhuys/demo",
+                            "listedAt": "2026-08-01T00:00:00Z",
+                        }
+                    ],
+                }
+            )
+        )
+        stats_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "plugins": {
+                        "io.github.mtolhuys.demo": {
+                            "views": 50,
+                            "copies": 5,
+                            "hearts": 1,
+                        }
+                    },
+                }
+            )
+        )
+        stars_path.write_text(json.dumps({"mtolhuys/demo": 42}))
+        os.environ["XDG_STATE_HOME"] = str(state)
+        os.environ["PULSE_CATALOG_FILE"] = str(catalog_path)
+        os.environ["PULSE_STATS_FILE"] = str(stats_path)
+        os.environ["PULSE_GITHUB_STARS_FILE"] = str(stars_path)
+        try:
+            result = ns["collect"]("mtolhuys")
+            if not result.get("ok"):
+                print("FAIL stars collect", result)
+                failures += 1
+            snap = ns["query_series"](ns["connect"](), resolution="daily")
+            totals = (snap.get("series") or [{}])[0].get("totals") or {}
+            if totals.get("stars") != 42:
+                print("FAIL stars totals", totals)
+                failures += 1
+            if (snap.get("totals") or {}).get("stars") != 42:
+                print("FAIL snapshot stars total", snap.get("totals"))
+                failures += 1
+        finally:
+            os.environ.pop("PULSE_CATALOG_FILE", None)
+            os.environ.pop("PULSE_STATS_FILE", None)
+            os.environ.pop("PULSE_GITHUB_STARS_FILE", None)
 
     # manifest sanity
     manifest = json.loads((ROOT / "manifest.json").read_text())

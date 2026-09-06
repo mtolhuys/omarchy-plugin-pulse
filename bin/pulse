@@ -33,10 +33,11 @@ ALLOWED_ORIGINS = frozenset(
     {
         "https://raw.githubusercontent.com",
         "https://api.omarchyplugins.com",
+        "https://api.github.com",
     }
 )
 DEFAULT_AUTHOR = ""  # no baked-in author
-METRICS = ("views", "copies", "hearts")
+METRICS = ("views", "copies", "hearts", "stars")
 MAX_DB_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 12 * 1024 * 1024
 HTTP_TIMEOUT = 25.0
@@ -303,6 +304,106 @@ def fetch_json(url: str, *, file_override: str | None = None) -> Any:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PulseError("invalid-json", "response was not valid UTF-8 JSON") from exc
+
+
+def parse_github_repo(repo: str | None) -> tuple[str, str] | None:
+    """Return (owner, name) from a GitHub URL or owner/name string."""
+    raw = str(repo or "").strip()
+    if not raw:
+        return None
+    # owner/name
+    if "://" not in raw and "git@" not in raw:
+        parts = [p for p in raw.strip("/").split("/") if p]
+        if len(parts) == 2 and all(parts):
+            return parts[0], parts[1].removesuffix(".git")
+        return None
+    # https://github.com/owner/repo[.git][/...]
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return None
+    host = (parsed.netloc or "").lower()
+    if host not in ("github.com", "www.github.com"):
+        return None
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    if len(parts) < 2:
+        return None
+    owner, name = parts[0], parts[1].removesuffix(".git")
+    if not owner or not name:
+        return None
+    return owner, name
+
+
+def _github_stars_map_from_env() -> dict[str, int] | None:
+    path = os.environ.get("PULSE_GITHUB_STARS_FILE")
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in data.items():
+        try:
+            out[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def github_fetch_enabled() -> bool:
+    """Live GitHub calls are skipped for offline fixture collects unless a stars map is set."""
+    if os.environ.get("PULSE_DISABLE_GITHUB") == "1":
+        return False
+    if os.environ.get("PULSE_GITHUB_STARS_FILE"):
+        return True
+    if os.environ.get("PULSE_STATS_FILE") or os.environ.get("PULSE_CATALOG_FILE"):
+        return False
+    return True
+
+
+def fetch_stargazers_count(owner: str, repo: str) -> int | None:
+    """Fetch stargazers_count; return None on any failure (do not fail collect)."""
+    env_map = _github_stars_map_from_env()
+    if env_map is not None:
+        return env_map.get(f"{owner}/{repo}")
+    if not github_fetch_enabled():
+        return None
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    try:
+        payload = fetch_json(url)
+    except PulseError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return int(payload.get("stargazers_count"))
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_stars_for_plugins(
+    items: list[dict[str, Any]],
+) -> dict[str, int | None]:
+    """Map plugin_id -> stars count (None means fetch missed; keep previous/0)."""
+    cache: dict[str, int | None] = {}
+    out: dict[str, int | None] = {}
+    for item in items:
+        plugin_id = str(item.get("id") or "").strip()
+        if not plugin_id:
+            continue
+        parsed = parse_github_repo(str(item.get("repo") or "") or None)
+        if parsed is None:
+            out[plugin_id] = None
+            continue
+        key = f"{parsed[0]}/{parsed[1]}"
+        if key not in cache:
+            cache[key] = fetch_stargazers_count(parsed[0], parsed[1])
+        out[plugin_id] = cache[key]
+    return out
+
 
 
 def matches_author(plugin: dict[str, Any], author_key: str) -> bool:
@@ -679,7 +780,7 @@ def observe_plugin(
 ) -> tuple[int, int, dict[str, Any] | None]:
     """Upsert plugin + seed/observe samples.
 
-    Returns (seeded, observed, alert_or_none). Alerts only for copies/hearts
+    Returns (seeded, observed, alert_or_none). Alerts only for copies/hearts/stars
     increases vs the previous observe (never on first seed).
     """
     plugin_id = str(item["id"])
@@ -701,11 +802,19 @@ def observe_plugin(
     metrics = raw_stats.get(plugin_id) or {}
     if not isinstance(metrics, dict):
         metrics = {}
-    values = {
+    values: dict[str, int] = {
         "views": int(metrics.get("views") or 0),
         "copies": int(metrics.get("copies") or 0),
         "hearts": int(metrics.get("hearts") or 0),
     }
+    # Stars only when explicitly provided (GitHub fetch / test fixture).
+    # Missing stars must not write a fake 0 — that would alert on the first real fetch.
+    stars_explicit = "stars" in metrics and metrics.get("stars") is not None
+    if stars_explicit:
+        try:
+            values["stars"] = int(metrics.get("stars") or 0)
+        except (TypeError, ValueError):
+            stars_explicit = False
     seeded = 0
     observed = 0
     first_time = not has_observe(conn, plugin_id)
@@ -713,29 +822,41 @@ def observe_plugin(
     if not first_time:
         copies_delta = 0
         hearts_delta = 0
+        stars_delta = 0
         prev_c = latest_observe_value(conn, plugin_id, "copies")
         prev_h = latest_observe_value(conn, plugin_id, "hearts")
+        prev_s = latest_observe_value(conn, plugin_id, "stars")
         if prev_c is not None and values["copies"] > prev_c:
             copies_delta = values["copies"] - prev_c
         if prev_h is not None and values["hearts"] > prev_h:
             hearts_delta = values["hearts"] - prev_h
-        if copies_delta or hearts_delta:
+        if (
+            stars_explicit
+            and prev_s is not None
+            and values["stars"] > prev_s
+        ):
+            stars_delta = values["stars"] - prev_s
+        if copies_delta or hearts_delta or stars_delta:
             alert = {
                 "id": plugin_id,
                 "name": name,
                 "copiesDelta": copies_delta,
                 "heartsDelta": hearts_delta,
+                "starsDelta": stars_delta,
                 "copies": values["copies"],
                 "hearts": values["hearts"],
+                "stars": values.get("stars", int(prev_s or 0)),
             }
+    # Only write metrics we actually have (stars may be absent until first fetch).
+    write_metrics = [m for m in METRICS if m in values]
     if first_time:
-        for metric in METRICS:
+        for metric in write_metrics:
             for ts, value in seed_series(listed_ts, now_ts, values[metric]):
                 if ts >= now_ts:
                     continue
                 insert_sample(conn, plugin_id, metric, ts, value, "seed")
                 seeded += 1
-    for metric in METRICS:
+    for metric in write_metrics:
         insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
         observed += 1
     return seeded, observed, alert
@@ -800,11 +921,24 @@ def collect(author: str | None = None) -> dict[str, Any]:
                     "listedAt": row["listed_at"],
                 }
 
+        stars_by_id = resolve_stars_for_plugins(list(matched_by_id.values()))
+        enriched_stats: dict[str, Any] = {}
+        for pid, item in matched_by_id.items():
+            base = raw_stats.get(pid) or {}
+            if not isinstance(base, dict):
+                base = {}
+            merged = dict(base)
+            star_val = stars_by_id.get(pid)
+            if star_val is not None:
+                merged["stars"] = star_val
+            # If fetch missed, omit stars so observe_plugin keeps previous/0.
+            enriched_stats[pid] = merged
+
         seeded = 0
         observed = 0
         alerts: list[dict[str, Any]] = []
         for item in matched_by_id.values():
-            s, o, alert = observe_plugin(conn, item, raw_stats, now_ts)
+            s, o, alert = observe_plugin(conn, item, enriched_stats, now_ts)
             seeded += s
             observed += o
             if alert is not None:
@@ -821,7 +955,11 @@ def collect(author: str | None = None) -> dict[str, Any]:
         conn.commit()
         # Sort alerts by combined growth, biggest first.
         alerts.sort(
-            key=lambda a: -(int(a.get("copiesDelta") or 0) + int(a.get("heartsDelta") or 0))
+            key=lambda a: -(
+                int(a.get("copiesDelta") or 0)
+                + int(a.get("heartsDelta") or 0)
+                + int(a.get("starsDelta") or 0)
+            )
         )
         return {
             "ok": True,
@@ -1026,10 +1164,14 @@ def query_series(
             }
         )
 
-    # Totals list: most popular (copies + hearts) first.
+    # Totals list: most popular (copies + hearts + stars) first.
     series.sort(
         key=lambda item: (
-            -(int(item["totals"].get("copies") or 0) + int(item["totals"].get("hearts") or 0)),
+            -(
+                int(item["totals"].get("copies") or 0)
+                + int(item["totals"].get("hearts") or 0)
+                + int(item["totals"].get("stars") or 0)
+            ),
             -(int(item["totals"].get("views") or 0)),
             str(item.get("name") or "").lower(),
         )
@@ -1047,7 +1189,7 @@ def query_series(
         for p in plugins
     ]
 
-    totals = {"views": 0, "copies": 0, "hearts": 0}
+    totals = {"views": 0, "copies": 0, "hearts": 0, "stars": 0}
     for item in series:
         for metric in METRICS:
             totals[metric] += int(item["totals"].get(metric) or 0)
@@ -1432,7 +1574,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Show store status")
 
     p_notify = sub.add_parser(
-        "set-notifications", help="Enable/disable hearts+copies growth notifications"
+        "set-notifications", help="Enable/disable hearts+copies+stars growth notifications"
     )
     p_notify.add_argument("state", choices=["on", "off"])
 

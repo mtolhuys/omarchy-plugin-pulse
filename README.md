@@ -36,7 +36,7 @@ Requires Omarchy Quattro with third-party `schemaVersion: 1` **service** + **bar
 
 ## What it shows
 
-* Multi-series line charts for views / copies / hearts
+* Multi-series line charts for views / copies / hearts / stars
 * Hourly · Daily · Weekly · Monthly resolutions
 * Per-plugin toggles and a totals table
 * Configurable author filter (matches author name, plugin id, or repo URL)
@@ -48,6 +48,7 @@ Requires Omarchy Quattro with third-party `schemaVersion: 1` **service** + **bar
 | --- | --- | --- |
 | Catalog | `https://raw.githubusercontent.com/omacom/omarchy-plugin-marketplace/main/site/catalog.json` | Plugin metadata + `listedAt` |
 | Stats | `https://api.omarchyplugins.com/v1/stats` | Current views / copies / hearts |
+| GitHub | `https://api.github.com/repos/{owner}/{repo}` | Current star count (per plugin repo) |
 
 Requests are HTTPS-only, origin-allowlisted, size-bounded, and sent with a clear `User-Agent`. Nothing is uploaded.
 
