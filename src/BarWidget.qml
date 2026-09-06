@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v020"
+  readonly property string buildIdentity: "plugin-pulse-widget-v022"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -70,11 +70,48 @@ BarWidget {
   property string pluginAddDraft: ""
   property real selectedTs: 0
   property bool keysHelpOpen: false
+  property int authorListIndex: -1
+  property int pluginListIndex: -1
 
   readonly property bool typingInField: (typeof authorAddField !== "undefined" && authorAddField.activeFocus)
     || (typeof pluginAddField !== "undefined" && pluginAddField.activeFocus)
   readonly property bool panelKeysEnabled: popupOpen && !typingInField
   readonly property bool settingsOpen: settingsPanel !== ""
+  readonly property var keysHelpModel: {
+    if (settingsPanel === "authors")
+      return [
+        { keys: "Esc", action: "back" },
+        { keys: "↓/j", action: "next" },
+        { keys: "↑/k", action: "prev" },
+        { keys: "⏎/Space", action: "toggle" },
+        { keys: "m", action: "market" },
+        { keys: "x/⌫", action: "delete" },
+        { keys: "?", action: "keys" }
+      ]
+    if (settingsPanel === "plugins")
+      return [
+        { keys: "Esc", action: "back" },
+        { keys: "↓/j", action: "next" },
+        { keys: "↑/k", action: "prev" },
+        { keys: "⏎/Space", action: "toggle" },
+        { keys: "a", action: "all/none" },
+        { keys: "m", action: "market" },
+        { keys: "x/⌫", action: "remove" },
+        { keys: "?", action: "keys" }
+      ]
+    return [
+      { keys: "Esc", action: "back" },
+      { keys: "q", action: "close" },
+      { keys: "r", action: "refresh" },
+      { keys: "1–4", action: "range" },
+      { keys: "v/c/h/s", action: "metric" },
+      { keys: "a", action: "authors" },
+      { keys: "p", action: "plugins" },
+      { keys: ",", action: "settings" },
+      { keys: "←/→", action: "scrub" },
+      { keys: "?", action: "keys" }
+    ]
+  }
   readonly property int enabledAuthorCount: {
     var authors = snapshot.authors || []
     var n = 0
@@ -121,6 +158,8 @@ BarWidget {
     confirmRemovePlugin = ""
     authorAddDraft = ""
     pluginAddDraft = ""
+    authorListIndex = -1
+    pluginListIndex = -1
     popupOpen = false
   }
   function closeForPopoutSwitch() { close() }
@@ -171,6 +210,8 @@ BarWidget {
     settingsPanel = settingsPanel === next ? "" : next
     confirmDeleteAuthor = ""
     confirmRemovePlugin = ""
+    authorListIndex = -1
+    pluginListIndex = -1
   }
 
   function authorIsEnabled(modelData) {
@@ -187,6 +228,155 @@ BarWidget {
       pulseService.disableAuthor(author)
     else
       pulseService.enableAuthor(author)
+  }
+
+  function authorCount() {
+    return (snapshot.authors || []).length
+  }
+
+  function pluginCount() {
+    return (pluginModel || []).length
+  }
+
+  function focusKeySurfaceSoon() {
+    Qt.callLater(function() {
+      if (!popupOpen) return
+      if (settingsPanel === "authors") {
+        authorListIndex = -1
+        if (typeof authorAddField !== "undefined")
+          authorAddField.forceActiveFocus()
+      } else if (settingsPanel === "plugins") {
+        pluginListIndex = -1
+        if (typeof pluginAddField !== "undefined")
+          pluginAddField.forceActiveFocus()
+      } else if (typeof keySurface !== "undefined") {
+        keySurface.forceActiveFocus()
+      }
+    })
+  }
+
+  function focusAuthorList(index) {
+    var n = authorCount()
+    if (n <= 0) {
+      authorListIndex = -1
+      if (typeof authorAddField !== "undefined")
+        authorAddField.forceActiveFocus()
+      return
+    }
+    var i = Math.max(0, Math.min(n - 1, index))
+    authorListIndex = i
+    var row = authorsList.children[i]
+    if (row && row.children && row.children.length > 0) {
+      row.children[0].forceActiveFocus()
+      authorsFlick.contentY = Math.max(
+        0,
+        Math.min(authorsFlick.contentHeight - authorsFlick.height, row.y - Style.space(4))
+      )
+    }
+  }
+
+  function focusPluginList(index) {
+    var n = pluginCount()
+    if (n <= 0) {
+      pluginListIndex = -1
+      if (typeof pluginAddField !== "undefined")
+        pluginAddField.forceActiveFocus()
+      return
+    }
+    var i = Math.max(0, Math.min(n - 1, index))
+    pluginListIndex = i
+    var row = pluginsList.children[i]
+    if (row && row.children && row.children.length > 0) {
+      row.children[0].forceActiveFocus()
+      pluginsFlick.contentY = Math.max(
+        0,
+        Math.min(pluginsFlick.contentHeight - pluginsFlick.height, row.y - Style.space(4))
+      )
+    }
+  }
+
+  function handleAuthorListKey(event) {
+    var t = (event.text || "").toLowerCase()
+    var authors = snapshot.authors || []
+    var n = authors.length
+    if (event.key === Qt.Key_Escape) {
+      handleEscape(); event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Up || t === "k") {
+      if (authorListIndex <= 0) {
+        authorListIndex = -1
+        authorAddField.forceActiveFocus()
+      } else {
+        focusAuthorList(authorListIndex - 1)
+      }
+      event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Down || t === "j") {
+      if (authorListIndex < n - 1)
+        focusAuthorList(authorListIndex + 1)
+      event.accepted = true; return
+    }
+    if (authorListIndex < 0 || authorListIndex >= n) return
+    var row = authors[authorListIndex]
+    var key = row ? String(row.key || "") : ""
+    if (t === "m" || ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+        && (event.modifiers & Qt.ShiftModifier))) {
+      openAuthorMarketplace(key); event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+      if (confirmDeleteAuthor === key)
+        requestDeleteAuthor(key)
+      else
+        toggleAuthorRow(key, authorIsEnabled(row))
+      event.accepted = true; return
+    }
+    if (t === "x" || event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+      requestDeleteAuthor(key); event.accepted = true; return
+    }
+  }
+
+  function handlePluginListKey(event) {
+    var t = (event.text || "").toLowerCase()
+    var plugins = pluginModel || []
+    var n = plugins.length
+    if (event.key === Qt.Key_Escape) {
+      handleEscape(); event.accepted = true; return
+    }
+    if (t === "a") {
+      setAllPlugins(!allPluginsSelected)
+      event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Up || t === "k") {
+      if (pluginListIndex <= 0) {
+        pluginListIndex = -1
+        pluginAddField.forceActiveFocus()
+      } else {
+        focusPluginList(pluginListIndex - 1)
+      }
+      event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Down || t === "j") {
+      if (pluginListIndex < n - 1)
+        focusPluginList(pluginListIndex + 1)
+      event.accepted = true; return
+    }
+    if (pluginListIndex < 0 || pluginListIndex >= n) return
+    var row = plugins[pluginListIndex]
+    var id = row ? String(row.id || "") : ""
+    if (t === "m" || ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+        && (event.modifiers & Qt.ShiftModifier))) {
+      openPluginMarketplace(id); event.accepted = true; return
+    }
+    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+      if (confirmRemovePlugin === id)
+        requestRemovePlugin(id)
+      else
+        togglePlugin(id, !(row && row.enabled === true))
+      event.accepted = true; return
+    }
+    if (t === "x" || event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+      requestRemovePlugin(id); event.accepted = true; return
+    }
   }
 
   function addTrackedAuthor() {
@@ -329,6 +519,20 @@ BarWidget {
     if (!authorAddField.activeFocus) authorEdit = authorValue || authorEdit
   }
 
+  onPopupOpenChanged: {
+    if (popupOpen)
+      focusKeySurfaceSoon()
+  }
+
+  onSettingsPanelChanged: {
+    if (settingsPanel !== "authors")
+      authorListIndex = -1
+    if (settingsPanel !== "plugins")
+      pluginListIndex = -1
+    if (popupOpen)
+      focusKeySurfaceSoon()
+  }
+
   WidgetButton {
     id: button
     anchors.fill: parent
@@ -365,39 +569,55 @@ BarWidget {
     owner: root
     open: root.popupOpen
     focusTarget: root.settingsPanel === "authors" ? authorAddField
-      : (root.settingsPanel === "plugins" ? pluginAddField : lineChart)
+      : (root.settingsPanel === "plugins" ? pluginAddField : keySurface)
     contentWidth: popup.fittedContentWidth(Style.space(520))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight)
 
-    Flickable {
-      id: panelScroll
+    // Dedicated key surface — KeyboardPanel focuses this (not the chart),
+    // matching News Radar's FocusScope so letter/? keys actually arrive.
+    FocusScope {
+      id: keySurface
       anchors.fill: parent
-      contentWidth: width
-      contentHeight: panelColumn.implicitHeight
-      clip: true
-      boundsBehavior: Flickable.StopAtBounds
-      interactive: contentHeight > height + 2
-      QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
-      QQC.ScrollBar.horizontal: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
       focus: true
 
-      // Prefer event.text for "?" — Shortcut "?" / Shift+/ is unreliable across layouts.
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (!root.panelKeysEnabled) return
-        // Mirror News Radar: event.text is the reliable "?" signal across layouts.
-        var t = event.text || ""
-        if (t === "?" || (event.key === Qt.Key_Slash && (event.modifiers & Qt.ShiftModifier))) {
-          root.toggleKeysHelp()
-          event.accepted = true
+        // "?" works whenever the popup is open and we are not typing in an add field.
+        if (root.popupOpen && !root.typingInField) {
+          var tHelp = event.text || ""
+          if (tHelp === "?" || (event.key === Qt.Key_Slash && (event.modifiers & Qt.ShiftModifier))) {
+            root.toggleKeysHelp()
+            event.accepted = true
+            return
+          }
         }
+        if (root.settingsPanel === "authors" && !root.typingInField) {
+          root.handleAuthorListKey(event)
+          if (event.accepted) return
+        }
+        if (root.settingsPanel === "plugins" && !root.typingInField) {
+          root.handlePluginListKey(event)
+          if (event.accepted) return
+        }
+        if (!root.panelKeysEnabled) return
       }
 
-      Shortcut {
-        sequence: "Escape"
-        context: Qt.WindowShortcut
-        onActivated: root.handleEscape()
-      }
+      Flickable {
+        id: panelScroll
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: panelColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height + 2
+        QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
+        QQC.ScrollBar.horizontal: QQC.ScrollBar { policy: QQC.ScrollBar.AlwaysOff }
+
+        Shortcut {
+          sequence: "Escape"
+          context: Qt.WindowShortcut
+          onActivated: root.handleEscape()
+        }
 
       Shortcut {
         sequence: "Left"
@@ -487,7 +707,13 @@ BarWidget {
         sequence: "a"
         enabled: root.panelKeysEnabled
         context: Qt.WindowShortcut
-        onActivated: { root.keysHelpOpen = false; root.toggleSettingsPanel("authors") }
+        onActivated: {
+          root.keysHelpOpen = false
+          if (root.settingsPanel === "plugins")
+            root.setAllPlugins(!root.allPluginsSelected)
+          else
+            root.toggleSettingsPanel("authors")
+        }
       }
 
       Shortcut {
@@ -506,15 +732,15 @@ BarWidget {
 
       Shortcut {
         sequence: "?"
-        enabled: root.panelKeysEnabled
-        context: Qt.WindowShortcut
+        enabled: root.popupOpen && !root.typingInField
+        context: Qt.ApplicationShortcut
         onActivated: root.toggleKeysHelp()
       }
 
       Shortcut {
         sequence: "Shift+/"
-        enabled: root.panelKeysEnabled
-        context: Qt.WindowShortcut
+        enabled: root.popupOpen && !root.typingInField
+        context: Qt.ApplicationShortcut
         onActivated: root.toggleKeysHelp()
       }
 
@@ -671,18 +897,7 @@ BarWidget {
             Accessible.name: "Keyboard shortcuts"
 
             Repeater {
-              model: [
-                { keys: "Esc", action: "back" },
-                { keys: "q", action: "close" },
-                { keys: "r", action: "refresh" },
-                { keys: "1–4", action: "range" },
-                { keys: "v/c/h/s", action: "metric" },
-                { keys: "a", action: "authors" },
-                { keys: "p", action: "plugins" },
-                { keys: ",", action: "settings" },
-                { keys: "←/→", action: "scrub" },
-                { keys: "?", action: "keys" }
-              ]
+              model: root.keysHelpModel
 
               delegate: Row {
                 required property var modelData
@@ -700,7 +915,7 @@ BarWidget {
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.action + (index < 9 ? " ·" : "")
+                  text: modelData.action + (index < root.keysHelpModel.length - 1 ? " ·" : "")
                   color: Util.alpha(Color.popups.text, 0.45)
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
@@ -954,6 +1169,7 @@ BarWidget {
 
                   delegate: Row {
                     required property var modelData
+                    required property int index
                     width: authorsList.width
                     spacing: Style.space(4)
 
@@ -965,13 +1181,18 @@ BarWidget {
                       )
                       text: (root.authorIsEnabled(modelData) ? "✓  " : "") + Model.safeLabel(modelData.key)
                       leftAlign: true
-                      selected: root.authorIsEnabled(modelData)
-                      bordered: root.authorIsEnabled(modelData)
+                      selected: root.authorIsEnabled(modelData) || root.authorListIndex === index
+                      bordered: root.authorIsEnabled(modelData) || root.authorListIndex === index
                       focusable: true
                       tooltipText: modelData.pluginCount + " plugins · "
                         + modelData.sampleCount + " samples · right-click marketplace"
-                      onClicked: root.toggleAuthorRow(modelData.key, root.authorIsEnabled(modelData))
+                      onClicked: {
+                        root.authorListIndex = index
+                        root.toggleAuthorRow(modelData.key, root.authorIsEnabled(modelData))
+                      }
                       onRightClicked: root.openAuthorMarketplace(modelData.key)
+                      onActiveFocusChanged: if (activeFocus) root.authorListIndex = index
+                      Keys.onPressed: function(event) { root.handleAuthorListKey(event) }
                     }
 
                     Button {
@@ -982,6 +1203,8 @@ BarWidget {
                       tooltipText: "Open " + modelData.key + " on the marketplace"
                       Accessible.name: "Marketplace " + modelData.key
                       onClicked: root.openAuthorMarketplace(modelData.key)
+                      onActiveFocusChanged: if (activeFocus) root.authorListIndex = index
+                      Keys.onPressed: function(event) { root.handleAuthorListKey(event) }
                     }
 
                     Button {
@@ -1000,6 +1223,8 @@ BarWidget {
                         ? "Click again to permanently purge " + modelData.key
                         : "Delete " + modelData.key + " and purge stored plugins"
                       onClicked: root.requestDeleteAuthor(modelData.key)
+                      onActiveFocusChanged: if (activeFocus) root.authorListIndex = index
+                      Keys.onPressed: function(event) { root.handleAuthorListKey(event) }
                     }
                   }
                 }
@@ -1019,6 +1244,18 @@ BarWidget {
                 Accessible.name: "Add author"
                 onTextEdited: root.authorAddDraft = text
                 onAccepted: root.addTrackedAuthor()
+                onActiveFocusChanged: if (activeFocus) root.authorListIndex = -1
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    root.handleEscape(); event.accepted = true; return
+                  }
+                  if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) {
+                    if (root.authorCount() > 0) {
+                      root.focusAuthorList(0)
+                      event.accepted = true
+                    }
+                  }
+                }
                 TapHandler { onTapped: authorAddField.forceActiveFocus() }
               }
 
@@ -1115,16 +1352,35 @@ BarWidget {
 
                   delegate: Row {
                     required property var modelData
+                    required property int index
                     width: pluginsList.width
                     spacing: Style.space(4)
 
                     Item {
+                      id: pluginRowFocus
                       anchors.verticalCenter: parent.verticalCenter
                       width: Math.max(
                         Style.space(80),
                         parent.width - marketPluginButton.width - trashPluginButton.width - Style.space(8)
                       )
                       height: pluginLabels.implicitHeight
+                      focus: true
+                      activeFocusOnTab: true
+                      Accessible.role: Accessible.Button
+                      Accessible.name: String(modelData.name || modelData.id || "plugin")
+                      Accessible.onPressAction: root.togglePlugin(
+                        modelData.id, !(modelData && modelData.enabled === true)
+                      )
+
+                      Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: -Style.space(2)
+                        radius: Style.cornerRadius
+                        color: "transparent"
+                        border.width: root.pluginListIndex === index ? 1 : 0
+                        border.color: Color.accent
+                        opacity: 0.7
+                      }
 
                       Column {
                         id: pluginLabels
@@ -1133,7 +1389,8 @@ BarWidget {
 
                         Text {
                           width: parent.width
-                          text: Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
+                          text: (modelData.enabled === true ? "✓  " : "")
+                            + Model.safeLabel(root.chipLabel(modelData.name, modelData.id))
                           color: Color.popups.text
                           font.family: Style.font.family
                           font.pixelSize: Style.font.bodySmall
@@ -1157,10 +1414,20 @@ BarWidget {
 
                       MouseArea {
                         anchors.fill: parent
-                        acceptedButtons: Qt.RightButton
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.openPluginMarketplace(modelData.id)
+                        onClicked: function(mouse) {
+                          root.pluginListIndex = index
+                          pluginRowFocus.forceActiveFocus()
+                          if (mouse.button === Qt.RightButton)
+                            root.openPluginMarketplace(modelData.id)
+                          else
+                            root.togglePlugin(modelData.id, !(modelData && modelData.enabled === true))
+                        }
                       }
+
+                      onActiveFocusChanged: if (activeFocus) root.pluginListIndex = index
+                      Keys.onPressed: function(event) { root.handlePluginListKey(event) }
                     }
 
                     Button {
@@ -1171,6 +1438,8 @@ BarWidget {
                       tooltipText: "Open marketplace page"
                       Accessible.name: "Marketplace " + String(modelData.id || "")
                       onClicked: root.openPluginMarketplace(modelData.id)
+                      onActiveFocusChanged: if (activeFocus) root.pluginListIndex = index
+                      Keys.onPressed: function(event) { root.handlePluginListKey(event) }
                     }
 
                     Button {
@@ -1189,6 +1458,8 @@ BarWidget {
                         ? "Click again to remove " + modelData.id
                         : "Remove " + modelData.id + " from the pool"
                       onClicked: root.requestRemovePlugin(modelData.id)
+                      onActiveFocusChanged: if (activeFocus) root.pluginListIndex = index
+                      Keys.onPressed: function(event) { root.handlePluginListKey(event) }
                     }
                   }
                 }
@@ -1208,6 +1479,18 @@ BarWidget {
                 Accessible.name: "Add plugin"
                 onTextEdited: root.pluginAddDraft = text
                 onAccepted: root.addTrackedPlugin()
+                onActiveFocusChanged: if (activeFocus) root.pluginListIndex = -1
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    root.handleEscape(); event.accepted = true; return
+                  }
+                  if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) {
+                    if (root.pluginCount() > 0) {
+                      root.focusPluginList(0)
+                      event.accepted = true
+                    }
+                  }
+                }
                 TapHandler { onTapped: pluginAddField.forceActiveFocus() }
               }
 
@@ -1800,6 +2083,7 @@ BarWidget {
         }
       }
     }
+    } // keySurface
   }
 
   IpcHandler {

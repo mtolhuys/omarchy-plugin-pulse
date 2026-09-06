@@ -124,4 +124,15 @@ A muted **Keys · ?** control sits in the header (left of Settings / Refresh). P
 | **← / →** | Scrub chart time selection |
 | **?** | Toggle Keys sheet |
 
+When **Authors** or **Plugins** is open, the Keys sheet switches to list navigation:
+
+| Shortcut | Action |
+| --- | --- |
+| **↓ / j** · **↑ / k** | Next / previous row (from the add field, ↓ moves into the list) |
+| **Enter / Space** | Toggle enable (or confirm delete/remove) |
+| **m** · **Shift+Enter** | Open marketplace page |
+| **x** · **Delete / Backspace** | Delete author / remove plugin (press twice to confirm) |
+| **a** (Plugins) | All / None chart visibility |
+| **Esc** | Cancel confirm → close panel → back |
+
 Letter shortcuts are ignored while typing in the Authors / Plugins add fields. Middle-click the bar icon also refreshes.
