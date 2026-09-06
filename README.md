@@ -89,10 +89,39 @@ MIT — see [LICENSE](LICENSE).
 
 ## Keybinding
 
-Optional Hyprland shortcut (add to `~/.config/hypr/bindings.lua`):
+### Global (Hyprland)
+
+Optional shortcuts (add to `~/.config/hypr/bindings.lua`):
 
 ```lua
 o.bind("SUPER + ALT + P", "Omarchy Plugin Pulse", "omarchy-shell shell toggle io.github.mtolhuys.plugin-pulse")
+o.bind("SUPER + ALT + SHIFT + P", "Plugin Pulse refresh", "omarchy-shell plugin-pulse-service collect")
 ```
 
-Then `hyprctl reload`. Toggle opens the Pulse popout if closed, and hides it if open.
+Then `hyprctl reload`.
+
+| Shortcut | Action |
+| --- | --- |
+| **Super + Alt + P** | Toggle the Plugin Pulse panel |
+| **Super + Alt + Shift + P** | Refresh marketplace stats in the background (optional) |
+
+`Super + K` lists global binds only — in-panel keys below are local to the open panel.
+
+### In panel
+
+A muted **Keys · ?** control sits in the header (left of Settings / Refresh). Press **?** (or click it) for a compact shortcut sheet.
+
+| Shortcut | Action |
+| --- | --- |
+| **Esc** | Close help → cancel confirm → close settings → close panel |
+| **q** | Close panel |
+| **r** | Refresh / collect |
+| **1 / 2 / 3 / 4** | Hourly / Daily / Weekly / Monthly |
+| **v / c / h / s** | Views / Copies / Hearts / Stars |
+| **a** | Toggle Authors |
+| **p** | Toggle Plugins |
+| **,** | Toggle Settings |
+| **← / →** | Scrub chart time selection |
+| **?** | Toggle Keys sheet |
+
+Letter shortcuts are ignored while typing in the Authors / Plugins add fields. Middle-click the bar icon also refreshes.

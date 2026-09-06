@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v018"
+  readonly property string buildIdentity: "plugin-pulse-widget-v019"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -69,7 +69,11 @@ BarWidget {
   property string authorAddDraft: ""
   property string pluginAddDraft: ""
   property real selectedTs: 0
+  property bool keysHelpOpen: false
 
+  readonly property bool typingInField: (typeof authorAddField !== "undefined" && authorAddField.activeFocus)
+    || (typeof pluginAddField !== "undefined" && pluginAddField.activeFocus)
+  readonly property bool panelKeysEnabled: popupOpen && !typingInField
   readonly property bool settingsOpen: settingsPanel !== ""
   readonly property int enabledAuthorCount: {
     var authors = snapshot.authors || []
@@ -110,6 +114,7 @@ BarWidget {
   }
 
   function close() {
+    keysHelpOpen = false
     settingsPanel = ""
     confirmClear = false
     confirmDeleteAuthor = ""
@@ -129,6 +134,27 @@ BarWidget {
   function setMetric(value) {
     selectedTs = 0
     metric = value
+  }
+
+  function applyMetricShortcut(value) {
+    // Chart keys should reveal the chart; close pool/settings panels first.
+    if (settingsPanel !== "")
+      settingsPanel = ""
+    keysHelpOpen = false
+    setMetric(value)
+  }
+
+  function toggleKeysHelp() {
+    keysHelpOpen = !keysHelpOpen
+  }
+
+  function handleEscape() {
+    if (keysHelpOpen) keysHelpOpen = false
+    else if (confirmDeleteAuthor) confirmDeleteAuthor = ""
+    else if (confirmRemovePlugin) confirmRemovePlugin = ""
+    else if (confirmClear) confirmClear = false
+    else if (settingsPanel !== "") settingsPanel = ""
+    else close()
   }
 
   function refresh() {
@@ -358,27 +384,126 @@ BarWidget {
       Shortcut {
         sequence: "Escape"
         context: Qt.WindowShortcut
-        onActivated: {
-          if (root.confirmDeleteAuthor) root.confirmDeleteAuthor = ""
-          else if (root.confirmRemovePlugin) root.confirmRemovePlugin = ""
-          else if (root.confirmClear) root.confirmClear = false
-          else if (root.settingsPanel !== "") root.settingsPanel = ""
-          else root.close()
-        }
+        onActivated: root.handleEscape()
       }
 
       Shortcut {
         sequence: "Left"
-        enabled: root.popupOpen && !root.settingsOpen
+        enabled: root.popupOpen && !root.settingsOpen && !root.keysHelpOpen
         context: Qt.WindowShortcut
         onActivated: lineChart.stepBy(-1)
       }
 
       Shortcut {
         sequence: "Right"
-        enabled: root.popupOpen && !root.settingsOpen
+        enabled: root.popupOpen && !root.settingsOpen && !root.keysHelpOpen
         context: Qt.WindowShortcut
         onActivated: lineChart.stepBy(1)
+      }
+
+      Shortcut {
+        sequence: "q"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.close()
+      }
+
+      Shortcut {
+        sequence: "r"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.refresh()
+      }
+
+      Shortcut {
+        sequence: "1"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.setResolution("hourly")
+      }
+
+      Shortcut {
+        sequence: "2"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.setResolution("daily")
+      }
+
+      Shortcut {
+        sequence: "3"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.setResolution("weekly")
+      }
+
+      Shortcut {
+        sequence: "4"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.setResolution("monthly")
+      }
+
+      Shortcut {
+        sequence: "v"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.applyMetricShortcut("views")
+      }
+
+      Shortcut {
+        sequence: "c"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.applyMetricShortcut("copies")
+      }
+
+      Shortcut {
+        sequence: "h"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.applyMetricShortcut("hearts")
+      }
+
+      Shortcut {
+        sequence: "s"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.applyMetricShortcut("stars")
+      }
+
+      Shortcut {
+        sequence: "a"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: { root.keysHelpOpen = false; root.toggleSettingsPanel("authors") }
+      }
+
+      Shortcut {
+        sequence: "p"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: { root.keysHelpOpen = false; root.toggleSettingsPanel("plugins") }
+      }
+
+      Shortcut {
+        sequence: ","
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: { root.keysHelpOpen = false; root.toggleSettingsPanel("prefs") }
+      }
+
+      Shortcut {
+        sequence: "?"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.toggleKeysHelp()
+      }
+
+      Shortcut {
+        sequence: "Shift+/"
+        enabled: root.panelKeysEnabled
+        context: Qt.WindowShortcut
+        onActivated: root.toggleKeysHelp()
       }
 
       Column {
@@ -386,91 +511,220 @@ BarWidget {
         width: panelScroll.width
         spacing: Style.space(5)
 
-        Item {
+        Column {
+          id: headerBlock
           width: parent.width
-          height: Math.max(headerIcon.height, refreshButton.height, headerTitles.height)
+          spacing: Style.space(6)
 
-          Row {
-            id: headerLeft
-            anchors.left: parent.left
-            anchors.right: headerActions.left
-            anchors.rightMargin: Style.space(8)
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(10)
+          Item {
+            width: parent.width
+            height: Math.max(headerIcon.height, refreshButton.height, headerTitles.height)
 
-            BorderSurface {
-              id: headerIcon
-              width: Style.space(28)
-              height: width
-              color: Style.selectedFillFor(Color.accent, Color.accent)
-              borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
-              radius: Style.cornerRadius
+            Row {
+              id: headerLeft
+              anchors.left: parent.left
+              anchors.right: headerActions.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(10)
 
-              PulseIcon {
-                width: parent.width * 0.62
+              BorderSurface {
+                id: headerIcon
+                width: Style.space(28)
                 height: width
-                anchors.centerIn: parent
-                foreground: Color.accent
-                accent: Color.accent
-                active: true
+                color: Style.selectedFillFor(Color.accent, Color.accent)
+                borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+                radius: Style.cornerRadius
+
+                PulseIcon {
+                  width: parent.width * 0.62
+                  height: width
+                  anchors.centerIn: parent
+                  foreground: Color.accent
+                  accent: Color.accent
+                  active: true
+                }
+              }
+
+              Column {
+                id: headerTitles
+                width: Math.max(0, headerLeft.width - Style.space(28) - Style.space(10))
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: "Plugin Pulse"
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
+
+                Text {
+                  width: parent.width
+                  text: root.statusLabel()
+                  color: root.collecting ? Color.accent : Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
               }
             }
 
-            Column {
-              id: headerTitles
-              width: Math.max(0, headerLeft.width - Style.space(28) - Style.space(10))
+            Row {
+              id: headerActions
+              anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(2)
+              spacing: Style.space(6)
 
-              Text {
-                width: parent.width
-                text: "Plugin Pulse"
-                color: Color.popups.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.title
-                font.bold: true
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
+              Item {
+                id: keysHint
+                width: keysHintLabel.implicitWidth + Style.space(6)
+                height: Style.space(22)
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.role: Accessible.Button
+                Accessible.name: root.keysHelpOpen
+                  ? "Hide keyboard shortcuts"
+                  : "Show keyboard shortcuts"
+                Accessible.onPressAction: root.toggleKeysHelp()
+
+                Text {
+                  id: keysHintLabel
+                  anchors.centerIn: parent
+                  text: root.keysHelpOpen ? "Keys ▾" : "Keys · ?"
+                  color: keysHintHover.hovered || root.keysHelpOpen
+                    ? Color.popups.text
+                    : Util.alpha(Color.popups.text, 0.45)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  textFormat: Text.PlainText
+                }
+
+                HoverHandler { id: keysHintHover }
+                PanelToolTip {
+                  visible: keysHintHover.hovered
+                  text: root.keysHelpOpen
+                    ? "Hide shortcuts (?)"
+                    : "Show shortcuts (?)"
+                  fontFamily: Style.font.family
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.toggleKeysHelp()
+                }
               }
 
-              Text {
-                width: parent.width
-                text: root.statusLabel()
-                color: root.collecting ? Color.accent : Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
+              Button {
+                id: settingsButton
+                iconText: "⚙"
+                tooltipText: root.settingsPanel === "prefs"
+                  ? "Close settings"
+                  : "Settings"
+                focusable: true
+                selected: root.settingsPanel === "prefs"
+                bordered: root.settingsPanel === "prefs"
+                onClicked: root.toggleSettingsPanel("prefs")
+              }
+
+              Button {
+                id: refreshButton
+                iconText: "↻"
+                tooltipText: "Refresh marketplace stats"
+                focusable: true
+                enabled: !!root.pulseService && !root.busy
+                opacity: enabled ? 1 : 0.35
+                onClicked: root.refresh()
               }
             }
           }
 
-          Row {
-            id: headerActions
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(4)
+          BorderSurface {
+            id: keysHelpSheet
+            visible: root.keysHelpOpen
+            width: parent.width
+            implicitHeight: visible ? keysHelpInner.implicitHeight + Style.space(14) : 0
+            color: Style.selectedFillFor(Color.accent, Color.accent)
+            borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+            radius: Style.cornerRadius
+            Accessible.role: Accessible.StaticText
+            Accessible.name: "Keyboard shortcuts"
 
-            Button {
-              id: settingsButton
-              iconText: "⚙"
-              tooltipText: root.settingsPanel === "prefs"
-                ? "Close settings"
-                : "Settings"
-              focusable: true
-              selected: root.settingsPanel === "prefs"
-              bordered: root.settingsPanel === "prefs"
-              onClicked: root.toggleSettingsPanel("prefs")
-            }
+            Column {
+              id: keysHelpInner
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(8)
+              spacing: Style.space(6)
 
-            Button {
-              id: refreshButton
-              iconText: "↻"
-              tooltipText: "Refresh marketplace stats"
-              focusable: true
-              enabled: !!root.pulseService && !root.busy
-              opacity: enabled ? 1 : 0.35
-              onClicked: root.refresh()
+              Text {
+                width: parent.width
+                text: "Shortcuts"
+                color: Color.popups.text
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                textFormat: Text.PlainText
+              }
+
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Repeater {
+                  model: [
+                    { keys: "Esc", action: "back" },
+                    { keys: "q", action: "close" },
+                    { keys: "r", action: "refresh" },
+                    { keys: "1–4", action: "range" },
+                    { keys: "v/c/h/s", action: "metric" },
+                    { keys: "a", action: "authors" },
+                    { keys: "p", action: "plugins" },
+                    { keys: ",", action: "settings" },
+                    { keys: "←/→", action: "scrub" },
+                    { keys: "?", action: "keys" }
+                  ]
+
+                  delegate: Row {
+                    required property var modelData
+                    spacing: Style.space(4)
+
+                    BorderSurface {
+                      anchors.verticalCenter: parent.verticalCenter
+                      implicitWidth: keycapLabel.implicitWidth + Style.space(8)
+                      implicitHeight: Style.space(18)
+                      color: Style.normalFillFor(Color.popups.text, Color.accent)
+                      borderSpec: Border.controlSpec("normal", Color.popups.text, Color.accent)
+                      radius: Math.round(Style.cornerRadius * 0.7)
+
+                      Text {
+                        id: keycapLabel
+                        anchors.centerIn: parent
+                        text: modelData.keys
+                        color: Color.popups.text
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        textFormat: Text.PlainText
+                      }
+                    }
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: modelData.action
+                      color: Util.alpha(Color.popups.text, 0.62)
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                      textFormat: Text.PlainText
+                    }
+                  }
+                }
+              }
             }
           }
         }
