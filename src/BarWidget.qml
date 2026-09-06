@@ -11,7 +11,7 @@ BarWidget {
 
   moduleName: "io.github.mtolhuys.plugin-pulse"
 
-  readonly property string buildIdentity: "plugin-pulse-widget-v022"
+  readonly property string buildIdentity: "plugin-pulse-widget-v023"
   readonly property var pulseService: bar && bar.shell
     ? bar.shell.serviceFor("io.github.mtolhuys.plugin-pulse") : null
   readonly property var snapshot: pulseService ? pulseService.snapshot : Model.emptySnapshot()
@@ -249,8 +249,8 @@ BarWidget {
         pluginListIndex = -1
         if (typeof pluginAddField !== "undefined")
           pluginAddField.forceActiveFocus()
-      } else if (typeof keySurface !== "undefined") {
-        keySurface.forceActiveFocus()
+      } else if (typeof keyCatcher !== "undefined") {
+        keyCatcher.forceActiveFocus()
       }
     })
   }
@@ -568,38 +568,88 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    focusTarget: root.settingsPanel === "authors" ? authorAddField
-      : (root.settingsPanel === "plugins" ? pluginAddField : keySurface)
+    focusTarget: keyCatcher
     contentWidth: popup.fittedContentWidth(Style.space(520))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight)
 
-    // Dedicated key surface — KeyboardPanel focuses this (not the chart),
-    // matching News Radar's FocusScope so letter/? keys actually arrive.
-    FocusScope {
-      id: keySurface
+    // Stock Omarchy KeyboardPanel pattern: PanelKeyCatcher as focusTarget.
+    // textKey delivers "?" (and other single-char keys) without accepting them.
+    PanelKeyCatcher {
+      id: keyCatcher
       anchors.fill: parent
-      focus: true
+      blocked: root.typingInField
 
-      Keys.priority: Keys.BeforeItem
-      Keys.onPressed: function(event) {
-        // "?" works whenever the popup is open and we are not typing in an add field.
-        if (root.popupOpen && !root.typingInField) {
-          var tHelp = event.text || ""
-          if (tHelp === "?" || (event.key === Qt.Key_Slash && (event.modifiers & Qt.ShiftModifier))) {
-            root.toggleKeysHelp()
-            event.accepted = true
-            return
-          }
-        }
+      onCloseRequested: root.handleEscape()
+
+      onMoveRequested: function(dx, dy) {
         if (root.settingsPanel === "authors" && !root.typingInField) {
-          root.handleAuthorListKey(event)
-          if (event.accepted) return
+          if (dy < 0) {
+            var eu = { key: Qt.Key_Up, text: "", modifiers: 0, accepted: false }
+            root.handleAuthorListKey(eu)
+          } else if (dy > 0) {
+            var ed = { key: Qt.Key_Down, text: "", modifiers: 0, accepted: false }
+            root.handleAuthorListKey(ed)
+          }
+          return
         }
         if (root.settingsPanel === "plugins" && !root.typingInField) {
-          root.handlePluginListKey(event)
-          if (event.accepted) return
+          if (dy < 0) {
+            var pu = { key: Qt.Key_Up, text: "", modifiers: 0, accepted: false }
+            root.handlePluginListKey(pu)
+          } else if (dy > 0) {
+            var pd = { key: Qt.Key_Down, text: "", modifiers: 0, accepted: false }
+            root.handlePluginListKey(pd)
+          }
+          return
         }
-        if (!root.panelKeysEnabled) return
+        if (!root.settingsOpen && !root.keysHelpOpen && dx !== 0 && typeof lineChart !== "undefined")
+          lineChart.stepBy(dx)
+      }
+
+      onActivateRequested: {
+        if (root.settingsPanel === "authors" && !root.typingInField) {
+          var ea = { key: Qt.Key_Space, text: " ", modifiers: 0, accepted: false }
+          root.handleAuthorListKey(ea)
+        } else if (root.settingsPanel === "plugins" && !root.typingInField) {
+          var ep = { key: Qt.Key_Space, text: " ", modifiers: 0, accepted: false }
+          root.handlePluginListKey(ep)
+        }
+      }
+
+      onReturnRequested: {
+        // PanelKeyCatcher also emits activateRequested for Enter; avoid double-toggle.
+      }
+
+      onDeleteRequested: {
+        if (root.settingsPanel === "authors" && !root.typingInField) {
+          var xa = { key: 0, text: "x", modifiers: 0, accepted: false }
+          root.handleAuthorListKey(xa)
+        } else if (root.settingsPanel === "plugins" && !root.typingInField) {
+          var xp = { key: 0, text: "x", modifiers: 0, accepted: false }
+          root.handlePluginListKey(xp)
+        }
+      }
+
+      onTextKey: function(t) {
+        if (!root.popupOpen || root.typingInField) return
+        if (t === "?") {
+          root.toggleKeysHelp()
+          return
+        }
+        if (root.settingsPanel === "authors" && !root.typingInField) {
+          if (t === "m" || t === "M") {
+            var ma = { key: 0, text: "m", modifiers: 0, accepted: false }
+            root.handleAuthorListKey(ma)
+          }
+          return
+        }
+        if (root.settingsPanel === "plugins" && !root.typingInField) {
+          if (t === "m" || t === "M") {
+            var mp = { key: 0, text: "m", modifiers: 0, accepted: false }
+            root.handlePluginListKey(mp)
+          }
+          return
+        }
       }
 
       Flickable {
@@ -730,19 +780,6 @@ BarWidget {
         onActivated: { root.keysHelpOpen = false; root.toggleSettingsPanel("prefs") }
       }
 
-      Shortcut {
-        sequence: "?"
-        enabled: root.popupOpen && !root.typingInField
-        context: Qt.ApplicationShortcut
-        onActivated: root.toggleKeysHelp()
-      }
-
-      Shortcut {
-        sequence: "Shift+/"
-        enabled: root.popupOpen && !root.typingInField
-        context: Qt.ApplicationShortcut
-        onActivated: root.toggleKeysHelp()
-      }
 
       Column {
         id: panelColumn
@@ -2083,7 +2120,7 @@ BarWidget {
         }
       }
     }
-    } // keySurface
+    } // keyCatcher
   }
 
   IpcHandler {
