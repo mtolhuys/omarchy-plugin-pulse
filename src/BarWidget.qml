@@ -621,7 +621,10 @@ BarWidget {
 
               Button {
                 id: settingsButton
-                iconText: "⚙"
+                // Nerd Font MD glyphs — same family + metrics as refresh
+                iconText: "󰒓"
+                iconSize: Style.font.icon
+                anchors.verticalCenter: parent.verticalCenter
                 tooltipText: root.settingsPanel === "prefs"
                   ? "Close settings"
                   : "Settings"
@@ -633,11 +636,14 @@ BarWidget {
 
               Button {
                 id: refreshButton
-                iconText: "↻"
+                iconText: "󰑐"
+                iconSize: Style.font.icon
+                anchors.verticalCenter: parent.verticalCenter
                 tooltipText: "Refresh marketplace stats"
                 focusable: true
                 enabled: !!root.pulseService && !root.busy
                 opacity: enabled ? 1 : 0.35
+                iconSpinning: root.collecting
                 onClicked: root.refresh()
               }
             }
