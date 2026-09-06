@@ -5,7 +5,7 @@
 </p>
 
 <p align="center"><b>Local-first Omarchy bar widget</b> for marketplace growth.<br/>
-Track <b>Views · Copies · Hearts</b>, pool authors, and get alerts when you ship heat.</p>
+Track <b>Views · Copies · Hearts · Stars</b>, pool authors, and get alerts when you ship heat.</p>
 
 ## Install
 
@@ -51,6 +51,16 @@ Requires Omarchy Quattro with third-party `schemaVersion: 1` **service** + **bar
 | GitHub | `https://api.github.com/repos/{owner}/{repo}` | Current star count (per plugin repo) |
 
 Requests are HTTPS-only, origin-allowlisted, size-bounded, and sent with a clear `User-Agent`. Nothing is uploaded.
+
+
+## Estimated history
+
+On the first write of each metric (views / copies / hearts / stars), Plugin Pulse seeds a **smooth monotonic curve** from ~0 at the marketplace `listedAt` timestamp up to the first observed value. The UI labels this **Estimated history**.
+
+* It is a readability aid — **not** real historic GitHub star or marketplace traffic data.
+* Seeding is **per metric**. A late-added metric (e.g. stars on a plugin that already had views/copies/hearts) still gets its own estimated curve, including a one-time backfill when live observes already exist without seeds.
+* **Archive** copies the DB aside and drops seed points; live observes stay. **Clear** deletes samples.
+* The panel shows **Estimated history** whenever any seed samples remain.
 
 ## Storage
 

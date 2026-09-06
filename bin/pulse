@@ -676,7 +676,13 @@ def smoothstep(t: float) -> float:
 
 
 def seed_series(listed_ts: int, now_ts: int, final_value: int) -> list[tuple[int, int]]:
-    """Monotonic smooth curve from ~0 at listed_at to final_value at now."""
+    """Build estimated history: smooth monotonic curve from ~0 at listedAt to final_value.
+
+    This is NOT real historic marketplace or GitHub data. It invents a calm growth
+    curve so charts are readable before enough live observes exist. Used for every
+    metric (views/copies/hearts/stars) on first write, and to backfill seeds when a
+    late-added metric already has observes but no seed samples.
+    """
     if final_value < 0:
         final_value = 0
     if now_ts <= listed_ts:
@@ -749,6 +755,66 @@ def has_observe(conn: sqlite3.Connection, plugin_id: str) -> bool:
     return row is not None
 
 
+def has_metric_observe(conn: sqlite3.Connection, plugin_id: str, metric: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM samples
+        WHERE plugin_id = ? AND metric = ? AND source = 'observe'
+        LIMIT 1
+        """,
+        (plugin_id, metric),
+    ).fetchone()
+    return row is not None
+
+
+def has_metric_seed(conn: sqlite3.Connection, plugin_id: str, metric: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM samples
+        WHERE plugin_id = ? AND metric = ? AND source = 'seed'
+        LIMIT 1
+        """,
+        (plugin_id, metric),
+    ).fetchone()
+    return row is not None
+
+
+def earliest_observe_sample(
+    conn: sqlite3.Connection, plugin_id: str, metric: str
+) -> tuple[int, int] | None:
+    """Return (ts, value) for the earliest observe sample of plugin+metric."""
+    row = conn.execute(
+        """
+        SELECT ts, value FROM samples
+        WHERE plugin_id = ? AND metric = ? AND source = 'observe'
+        ORDER BY ts ASC
+        LIMIT 1
+        """,
+        (plugin_id, metric),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["ts"]), int(row["value"])
+
+
+def insert_estimated_seeds(
+    conn: sqlite3.Connection,
+    plugin_id: str,
+    metric: str,
+    listed_ts: int,
+    end_ts: int,
+    final_value: int,
+) -> int:
+    """Insert seed_series points with ts < end_ts. Does not write the end observe."""
+    seeded = 0
+    for ts, value in seed_series(listed_ts, end_ts, final_value):
+        if ts >= end_ts:
+            continue
+        insert_sample(conn, plugin_id, metric, ts, value, "seed")
+        seeded += 1
+    return seeded
+
+
 def insert_sample(
     conn: sqlite3.Connection,
     plugin_id: str,
@@ -778,10 +844,16 @@ def observe_plugin(
     raw_stats: dict[str, Any],
     now_ts: int,
 ) -> tuple[int, int, dict[str, Any] | None]:
-    """Upsert plugin + seed/observe samples.
+    """Upsert plugin + per-metric seed/observe samples.
+
+    Estimated history is seeded per metric (not only on the plugin's first observe):
+    - No samples yet for plugin+metric → seed listedAt→now, then observe at now.
+    - Observes exist but zero seeds (e.g. stars added later) → backfill seeds from
+      listedAt→earliest_observe using the earliest observe value; never rewrite observes.
 
     Returns (seeded, observed, alert_or_none). Alerts only for copies/hearts/stars
-    increases vs the previous observe (never on first seed).
+    increases vs a previous observe of that metric (never on first seed or first
+    real stars observe).
     """
     plugin_id = str(item["id"])
     name = str(item.get("name") or plugin_id)
@@ -817,46 +889,56 @@ def observe_plugin(
             stars_explicit = False
     seeded = 0
     observed = 0
-    first_time = not has_observe(conn, plugin_id)
     alert: dict[str, Any] | None = None
-    if not first_time:
-        copies_delta = 0
-        hearts_delta = 0
-        stars_delta = 0
-        prev_c = latest_observe_value(conn, plugin_id, "copies")
-        prev_h = latest_observe_value(conn, plugin_id, "hearts")
-        prev_s = latest_observe_value(conn, plugin_id, "stars")
-        if prev_c is not None and values["copies"] > prev_c:
-            copies_delta = values["copies"] - prev_c
-        if prev_h is not None and values["hearts"] > prev_h:
-            hearts_delta = values["hearts"] - prev_h
-        if (
-            stars_explicit
-            and prev_s is not None
-            and values["stars"] > prev_s
-        ):
-            stars_delta = values["stars"] - prev_s
-        if copies_delta or hearts_delta or stars_delta:
-            alert = {
-                "id": plugin_id,
-                "name": name,
-                "copiesDelta": copies_delta,
-                "heartsDelta": hearts_delta,
-                "starsDelta": stars_delta,
-                "copies": values["copies"],
-                "hearts": values["hearts"],
-                "stars": values.get("stars", int(prev_s or 0)),
-            }
+    copies_delta = 0
+    hearts_delta = 0
+    stars_delta = 0
+    prev_c = latest_observe_value(conn, plugin_id, "copies")
+    prev_h = latest_observe_value(conn, plugin_id, "hearts")
+    prev_s = latest_observe_value(conn, plugin_id, "stars")
+    if prev_c is not None and values["copies"] > prev_c:
+        copies_delta = values["copies"] - prev_c
+    if prev_h is not None and values["hearts"] > prev_h:
+        hearts_delta = values["hearts"] - prev_h
+    if (
+        stars_explicit
+        and prev_s is not None
+        and values["stars"] > prev_s
+    ):
+        stars_delta = values["stars"] - prev_s
+    if copies_delta or hearts_delta or stars_delta:
+        alert = {
+            "id": plugin_id,
+            "name": name,
+            "copiesDelta": copies_delta,
+            "heartsDelta": hearts_delta,
+            "starsDelta": stars_delta,
+            "copies": values["copies"],
+            "hearts": values["hearts"],
+            "stars": values.get("stars", int(prev_s or 0)),
+        }
     # Only write metrics we actually have (stars may be absent until first fetch).
     write_metrics = [m for m in METRICS if m in values]
-    if first_time:
-        for metric in write_metrics:
-            for ts, value in seed_series(listed_ts, now_ts, values[metric]):
-                if ts >= now_ts:
-                    continue
-                insert_sample(conn, plugin_id, metric, ts, value, "seed")
-                seeded += 1
     for metric in write_metrics:
+        # Per-metric estimated history: seed on first write, or backfill if observes
+        # already exist without any seeds (late-added metrics such as stars).
+        if not has_metric_seed(conn, plugin_id, metric):
+            if not has_metric_observe(conn, plugin_id, metric):
+                seeded += insert_estimated_seeds(
+                    conn, plugin_id, metric, listed_ts, now_ts, values[metric]
+                )
+            else:
+                earliest = earliest_observe_sample(conn, plugin_id, metric)
+                if earliest is not None:
+                    earliest_ts, earliest_val = earliest
+                    seeded += insert_estimated_seeds(
+                        conn,
+                        plugin_id,
+                        metric,
+                        listed_ts,
+                        earliest_ts,
+                        earliest_val,
+                    )
         insert_sample(conn, plugin_id, metric, now_ts, values[metric], "observe")
         observed += 1
     return seeded, observed, alert
